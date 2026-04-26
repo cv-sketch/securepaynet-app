@@ -1,8 +1,7 @@
-﻿import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '../store/useAuth'
 import { supabase } from '../lib/supabase'
 import { formatARS } from '../lib/format'
-import { bdcService } from '../services/bdcService'
 import ComprobanteModal from '../components/ComprobanteModal'
 
 type ComprobanteUI = {
@@ -26,34 +25,31 @@ export default function Transferir() {
   const [descripcion, setDescripcion] = useState('')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [walletId, setWalletId] = useState<string | null>(null)
   const [walletCvu, setWalletCvu] = useState<string | null>(null)
   const [comprobanteOpen, setComprobanteOpen] = useState(false)
   const [comprobanteData, setComprobanteData] = useState<ComprobanteUI | null>(null)
 
-  // Cargar wallet del cliente actual
   useEffect(() => {
     if (!cliente) return
     ;(async () => {
       const { data } = await supabase
         .from('wallets')
-        .select('id, cvu')
+        .select('cvu')
         .eq('cliente_id', cliente.id)
         .maybeSingle()
-      if (data) {
-        setWalletId(data.id)
-        setWalletCvu(data.cvu)
-      }
+      if (data) setWalletCvu(data.cvu)
     })()
   }, [cliente])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setMsg(null)
-    if (!cliente || !walletId || !walletCvu) {
+
+    if (!cliente || !walletCvu) {
       setMsg({ ok: false, text: 'No se pudo cargar tu wallet. Recarga la pagina.' })
       return
     }
+
     const m = parseFloat(monto)
     if (isNaN(m) || m <= 0) {
       setMsg({ ok: false, text: 'Ingresa un monto valido' })
@@ -63,183 +59,56 @@ export default function Transferir() {
       setMsg({ ok: false, text: 'Saldo insuficiente' })
       return
     }
-    if (!destino || destino.length < 6) {
-      setMsg({ ok: false, text: 'Ingresa un CVU, CBU o alias valido' })
+    if (!destino || destino.length !== 22) {
+      setMsg({ ok: false, text: 'CBU/CVU destino debe tener 22 digitos' })
+      return
+    }
+    if (!destinoCuit || destinoCuit.length !== 11) {
+      setMsg({ ok: false, text: 'CUIT destino debe tener 11 digitos' })
       return
     }
 
     setLoading(true)
     try {
-      const originId = 'trx-' + Date.now()
-      const titularOrigen = `${cliente.nombre ?? ''} ${cliente.apellido ?? ''}`.trim() || '—'
-
-      // 1. Llamar al servicio BDC
-      const res = await bdcService.enviarTransferencia({
-        originId,
-        fromAddress: walletCvu,
-        fromCuit: cliente.cuit ?? '',
-        toAddress: destino,
-        toCuit: destinoCuit,
-        amount: m,
-        concept: concepto,
-        description: descripcion,
+      const { data, error } = await supabase.functions.invoke('transferencia-execute', {
+        body: {
+          cbu_destino: destino,
+          cuit_destino: destinoCuit,
+          monto: m,
+          concepto,
+          descripcion: descripcion || null,
+        },
       })
 
-      if (!res.ok) {
-        setMsg({ ok: false, text: res.message || 'Error en la transferencia' })
+      if (error) {
+        setMsg({ ok: false, text: 'Error: ' + (error.message || 'desconocido') })
         setLoading(false)
         return
       }
 
-      // 2. Buscar wallet destino interna (si existe)
-      const { data: walletDest } = await supabase
-        .from('wallets')
-        .select('id, cvu, alias, saldo, cliente_id, titular')
-        .or(`cvu.eq.${destino},alias.eq.${destino}`)
-        .maybeSingle()
+      if (!data?.ok) {
+        setMsg({ ok: false, text: data?.message || 'Error en la transferencia' })
+        setLoading(false)
+        return
+      }
 
-      const titularDestino = walletDest?.titular || '—'
-
-      // 3. INSERT transferencia
-      const { data: trxRow, error: trxErr } = await supabase
-        .from('transferencias')
-        .insert({
-          origin_id: originId,
-          wallet_origen_id: walletId,
-          wallet_destino_id: walletDest?.id ?? null,
-          from_cvu: walletCvu,
-          from_cuit: cliente.cuit ?? null,
-          to_address: destino,
-          to_cuit: destinoCuit || null,
+      const comp = data.comprobante
+      if (comp) {
+        const compUI: ComprobanteUI = {
+          id: comp.id,
+          numero: comp.numero ?? null,
+          fecha: comp.created_at,
+          tipo: 'Transferencia enviada',
           monto: m,
-          moneda: 'ARS',
-          concepto,
-          descripcion: descripcion || null,
-          coelsa_id: res.coelsaId ?? null,
-          referencia: res.coelsaId ?? null,
-          estado: 'completada',
-          tipo: concepto,
-        })
-        .select()
-        .single()
-      if (trxErr) throw trxErr
-
-      // 4. UPDATE saldo origen (debito)
-      const saldoAnteriorOrigen = Number(cliente.saldo ?? 0)
-      const saldoPosteriorOrigen = saldoAnteriorOrigen - m
-      const { error: updOrigenErr } = await supabase
-        .from('wallets')
-        .update({ saldo: saldoPosteriorOrigen })
-        .eq('id', walletId)
-      if (updOrigenErr) throw updOrigenErr
-
-      // 5. INSERT movimiento debito
-      const { error: movDebErr } = await supabase.from('movimientos').insert({
-        wallet_id: walletId,
-        cvu: walletCvu,
-        tipo: 'debito',
-        monto: m,
-        saldo_anterior: saldoAnteriorOrigen,
-        saldo_posterior: saldoPosteriorOrigen,
-        descripcion: descripcion || `Transferencia a ${destino.slice(0, 14)}... (${concepto})`,
-        estado: 'completado',
-        referencia: res.coelsaId ?? originId,
-        transferencia_id: trxRow.id,
-      })
-      if (movDebErr) throw movDebErr
-
-      // 6. Si destino es interno: UPDATE saldo destino + INSERT movimiento credito
-      if (walletDest) {
-        const saldoAntDest = Number(walletDest.saldo ?? 0)
-        const saldoPostDest = saldoAntDest + m
-        await supabase
-          .from('wallets')
-          .update({ saldo: saldoPostDest })
-          .eq('id', walletDest.id)
-        await supabase.from('movimientos').insert({
-          wallet_id: walletDest.id,
-          cvu: walletDest.cvu,
-          tipo: 'credito',
-          monto: m,
-          saldo_anterior: saldoAntDest,
-          saldo_posterior: saldoPostDest,
-          descripcion:
-            descripcion ||
-            `Transferencia recibida de ${walletCvu.slice(-8)} (${concepto})`,
+          contraparte: comp.titular_destino ?? null,
+          cbu_contraparte: comp.cvu_destino ?? destino,
+          referencia: data.coelsa_id ?? data.origin_id ?? null,
           estado: 'completado',
-          referencia: res.coelsaId ?? originId,
-          transferencia_id: trxRow.id,
-        })
+        }
+        setComprobanteData(compUI)
+        setComprobanteOpen(true)
       }
 
-      // 7. INSERT comprobante (solo para la operacion saliente)
-      const { data: compRow, error: compErr } = await supabase
-        .from('comprobantes')
-        .insert({
-          transferencia_id: trxRow.id,
-          wallet_origen_id: walletId,
-          wallet_destino_id: walletDest?.id ?? null,
-          cliente_id: cliente.id,
-          titular_origen: titularOrigen,
-          cuit_origen: cliente.cuit ?? null,
-          cvu_origen: walletCvu,
-          titular_destino: titularDestino,
-          cuit_destino: destinoCuit || null,
-          cvu_destino: destino,
-          monto: m,
-          moneda: 'ARS',
-          concepto,
-          descripcion: descripcion || null,
-          coelsa_id: res.coelsaId ?? null,
-          origin_id: originId,
-          saldo_anterior: saldoAnteriorOrigen,
-          saldo_posterior: saldoPosteriorOrigen,
-          banco: 'Banco de Comercio',
-          payload: {
-            origen: {
-              titular: titularOrigen,
-              cuit: cliente.cuit,
-              cvu: walletCvu,
-              walletId,
-            },
-            destino: {
-              titular: titularDestino,
-              cuit: destinoCuit,
-              cvu: destino,
-              interna: !!walletDest,
-            },
-            operacion: {
-              monto: m,
-              moneda: 'ARS',
-              concepto,
-              descripcion,
-              coelsaId: res.coelsaId,
-              originId,
-            },
-            saldos: { anterior: saldoAnteriorOrigen, posterior: saldoPosteriorOrigen },
-            timestamp: new Date().toISOString(),
-          },
-        })
-        .select()
-        .single()
-      if (compErr) throw compErr
-
-      // 8. Mostrar comprobante al usuario
-      const compUI: ComprobanteUI = {
-        id: compRow.id,
-        numero: compRow.numero ?? null,
-        fecha: compRow.created_at,
-        tipo: 'Transferencia enviada',
-        monto: m,
-        contraparte: titularDestino,
-        cbu_contraparte: destino,
-        referencia: res.coelsaId ?? originId,
-        estado: 'completado',
-      }
-      setComprobanteData(compUI)
-      setComprobanteOpen(true)
-
-      // 9. Reset form + refrescar saldo
       setMsg({ ok: true, text: 'Transferencia enviada. Comprobante generado.' })
       setDestino('')
       setDestinoCuit('')
@@ -271,28 +140,31 @@ export default function Transferir() {
       >
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
-            CVU, CBU o alias destino
+            CBU/CVU destino (22 digitos)
           </label>
           <input
             type="text"
             required
+            maxLength={22}
             value={destino}
-            onChange={(e) => setDestino(e.target.value)}
+            onChange={(e) => setDestino(e.target.value.replace(/\D/g, ''))}
             className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-brand-500"
-            placeholder="0000003100000000000000 o alias.persona"
+            placeholder="0000003100000000000000"
           />
         </div>
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
-            CUIT del destinatario (opcional)
+            CUIT del destinatario (11 digitos)
           </label>
           <input
             type="text"
+            required
+            maxLength={11}
             value={destinoCuit}
-            onChange={(e) => setDestinoCuit(e.target.value)}
+            onChange={(e) => setDestinoCuit(e.target.value.replace(/\D/g, ''))}
             className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-brand-500"
-            placeholder="20-12345678-9"
+            placeholder="20123456789"
           />
         </div>
 
