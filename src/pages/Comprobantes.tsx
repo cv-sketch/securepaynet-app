@@ -4,12 +4,23 @@ import { supabase } from '../lib/supabase'
 import { formatARS, formatDateAR } from '../lib/format'
 import ComprobanteModal from '../components/ComprobanteModal'
 
-type Comp = {
+type CompRow = {
+  id: string
+  numero: string | null
+  created_at: string
+  monto: number | string
+  titular_destino: string | null
+  cvu_destino: string | null
+  coelsa_id: string | null
+  concepto: string | null
+}
+
+type ComprobanteUI = {
   id: string
   numero: string | null
   fecha: string
   tipo: string
-  monto: number | string
+  monto: number
   contraparte: string | null
   cbu_contraparte: string | null
   referencia: string | null
@@ -18,10 +29,10 @@ type Comp = {
 
 export default function Comprobantes() {
   const { cliente } = useAuth()
-  const [items, setItems] = useState<Comp[]>([])
+  const [items, setItems] = useState<CompRow[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<Comp | null>(null)
+  const [selected, setSelected] = useState<ComprobanteUI | null>(null)
 
   useEffect(() => {
     if (!cliente) return
@@ -29,14 +40,31 @@ export default function Comprobantes() {
       setLoading(true)
       const { data } = await supabase
         .from('comprobantes')
-        .select('id, numero, fecha, tipo, monto, contraparte, cbu_contraparte, referencia, estado')
+        .select(
+          'id, numero, created_at, monto, titular_destino, cvu_destino, coelsa_id, concepto'
+        )
         .eq('cliente_id', cliente.id)
-        .order('fecha', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(100)
-      setItems((data ?? []) as Comp[])
+      setItems((data ?? []) as CompRow[])
       setLoading(false)
     })()
   }, [cliente])
+
+  const openComprobante = (c: CompRow) => {
+    setSelected({
+      id: c.id,
+      numero: c.numero,
+      fecha: c.created_at,
+      tipo: 'Transferencia enviada',
+      monto: Number(c.monto),
+      contraparte: c.titular_destino,
+      cbu_contraparte: c.cvu_destino,
+      referencia: c.coelsa_id,
+      estado: 'completado',
+    })
+    setOpen(true)
+  }
 
   return (
     <div className="p-4">
@@ -52,13 +80,16 @@ export default function Comprobantes() {
           {items.map((c) => (
             <li key={c.id}>
               <button
-                onClick={() => { setSelected(c); setOpen(true) }}
+                onClick={() => openComprobante(c)}
                 className="w-full p-3 flex items-center justify-between hover:bg-slate-50 text-left"
               >
                 <div className="min-w-0">
-                  <div className="font-semibold text-sm truncate">{c.tipo}</div>
+                  <div className="font-semibold text-sm truncate">
+                    Transferencia enviada
+                  </div>
                   <div className="text-xs text-slate-500 truncate">
-                    {c.contraparte ?? c.numero ?? '-'} · {formatDateAR(c.fecha)}
+                    {c.titular_destino ?? c.numero ?? '-'} ·{' '}
+                    {formatDateAR(c.created_at)}
                   </div>
                 </div>
                 <div className="text-sm font-bold">{formatARS(c.monto)}</div>
@@ -67,7 +98,12 @@ export default function Comprobantes() {
           ))}
         </ul>
       )}
-      <ComprobanteModal open={open} onClose={() => setOpen(false)} comprobante={selected} />
+
+      <ComprobanteModal
+        open={open}
+        onClose={() => setOpen(false)}
+        comprobante={selected}
+      />
     </div>
   )
 }
