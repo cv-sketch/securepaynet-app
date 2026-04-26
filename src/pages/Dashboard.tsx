@@ -1,29 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
-import { supabase } from '../lib/supabase'
 import { formatARS, maskCBU } from '../lib/format'
 
 export default function Dashboard() {
   const { cliente } = useAuth()
-  const [saldo, setSaldo] = useState<number>(0)
-  const [loading, setLoading] = useState(true)
   const [hideBalance, setHideBalance] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!cliente) return
-    ;(async () => {
-      setLoading(true)
-      const { data } = await supabase
-        .from('saldos')
-        .select('saldo')
-        .eq('cliente_id', cliente.id)
-        .maybeSingle()
-      setSaldo(Number(data?.saldo ?? 0))
-      setLoading(false)
-    })()
-  }, [cliente])
+  const saldo = Number(cliente?.saldo ?? 0)
+  const loading = !cliente
 
   const copy = async (text: string, label: string) => {
     await navigator.clipboard.writeText(text)
@@ -46,7 +32,9 @@ export default function Dashboard() {
         <div className="text-3xl font-bold">
           {loading ? '...' : hideBalance ? '$ ******' : formatARS(saldo)}
         </div>
-        <div className="mt-3 text-xs opacity-80">Cuenta en pesos - ARS</div>
+        <div className="mt-3 text-xs opacity-80">
+          Cuenta en pesos - {cliente?.moneda ?? 'ARS'}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
