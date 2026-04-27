@@ -21,6 +21,7 @@ import Privacidad from './pages/Privacidad'
 import Arrepentimiento from './pages/Arrepentimiento'
 import Baja from './pages/Baja'
 import Contactos from './pages/Contactos'
+import Signup from './pages/Signup'
 
 function Protected({ children }: { children: JSX.Element }) {
   const { user, hydrating } = useAuth()
@@ -36,6 +37,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
       <Route element={<Protected><AppLayout /></Protected>}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/movimientos" element={<Movimientos />} />
