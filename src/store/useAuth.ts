@@ -1,5 +1,8 @@
-﻿import { create } from 'zustand'
+import { create } from 'zustand'
 import { supabase } from '../lib/supabase'
+import { onboardingService } from '../services/onboardingService'
+import { passkeyService } from '../services/passkeyService'
+import { authenticateCredential } from '../lib/webauthn'
 
 type Cliente = {
   id: string
@@ -22,7 +25,13 @@ type State = {
   hydrate: () => Promise<void>
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
+  signUpWithEmail: (email: string, password: string) => Promise<void>
+  verifyEmailOtp: (email: string, code: string) => Promise<void>
+  signInWithGoogle: () => Promise<void>
+  signInWithPasskey: (email: string) => Promise<void>
 }
+
+const ONBOARDING_FLAG = 'onboarding-pending'
 
 async function loadCliente(authUserId: string): Promise<Cliente | null> {
   try {
@@ -66,10 +75,27 @@ async function loadCliente(authUserId: string): Promise<Cliente | null> {
   }
 }
 
+async function loadClienteWithRecovery(authUserId: string): Promise<Cliente | null> {
+  let cli = await loadCliente(authUserId)
+  if (cli) return cli
+  // Recovery: solo si vinimos de un flow de signup colgado
+  if (typeof window !== 'undefined' && window.sessionStorage?.getItem(ONBOARDING_FLAG)) {
+    try {
+      await onboardingService.completeOnboarding()
+      window.sessionStorage.removeItem(ONBOARDING_FLAG)
+      cli = await loadCliente(authUserId)
+    } catch (err) {
+      console.error('[loadClienteWithRecovery] completeOnboarding failed:', err)
+    }
+  }
+  return cli
+}
+
 export const useAuth = create<State>((set) => ({
   user: null,
   cliente: null,
   hydrating: true,
+
   hydrate: async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -77,7 +103,7 @@ export const useAuth = create<State>((set) => ({
         set({ user: null, cliente: null, hydrating: false })
         return
       }
-      const cliente = await loadCliente(session.user.id)
+      const cliente = await loadClienteWithRecovery(session.user.id)
       set({
         user: { id: session.user.id, email: session.user.email ?? '' },
         cliente,
@@ -88,11 +114,12 @@ export const useAuth = create<State>((set) => ({
       set({ hydrating: false })
     }
   },
+
   signIn: async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return { error: error.message }
     if (data.user) {
-      const cliente = await loadCliente(data.user.id)
+      const cliente = await loadClienteWithRecovery(data.user.id)
       set({
         user: { id: data.user.id, email: data.user.email ?? '' },
         cliente,
@@ -100,21 +127,48 @@ export const useAuth = create<State>((set) => ({
     }
     return { error: null }
   },
+
   signOut: async () => {
     await supabase.auth.signOut()
+    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
     set({ user: null, cliente: null })
+  },
+
+  signUpWithEmail: async (email, password) => {
+    if (typeof window !== 'undefined') window.sessionStorage?.setItem(ONBOARDING_FLAG, '1')
+    await onboardingService.signUpWithEmail(email, password)
+  },
+
+  verifyEmailOtp: async (email, code) => {
+    await onboardingService.verifyEmailOtp(email, code)
+    await onboardingService.completeOnboarding()
+    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
+  },
+
+  signInWithGoogle: async () => {
+    if (typeof window !== 'undefined') window.sessionStorage?.setItem(ONBOARDING_FLAG, '1')
+    const redirectTo = `${window.location.origin}/signup?step=onboarding`
+    await onboardingService.signInWithGoogle(redirectTo)
+  },
+
+  signInWithPasskey: async (email) => {
+    const { options } = await passkeyService.loginBegin(email)
+    const credential = await authenticateCredential(options)
+    const { hashedToken } = await passkeyService.loginFinish(email, credential)
+    const { error } = await supabase.auth.verifyOtp({ token_hash: hashedToken, type: 'magiclink' })
+    if (error) throw error
+    // listener onAuthStateChange recarga cliente
   },
 }))
 
-// Listener de cambios de sesión - NO bloquea hydrate
+// Listener de cambios de sesion - NO bloquea hydrate
 supabase.auth.onAuthStateChange((event, session) => {
   if (event === 'SIGNED_OUT' || !session?.user) {
     useAuth.setState({ user: null, cliente: null })
     return
   }
-  // Solo recargar cliente en eventos de signin (no en INITIAL_SESSION para evitar duplicar trabajo)
   if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-    loadCliente(session.user.id).then((cliente) => {
+    loadClienteWithRecovery(session.user.id).then((cliente) => {
       useAuth.setState({
         user: { id: session.user.id, email: session.user.email ?? '' },
         cliente,
