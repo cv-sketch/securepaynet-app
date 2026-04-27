@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 import { supabase } from '../lib/supabase'
-import { formatARS } from '../lib/format'
+import { formatARS, maskCBU } from '../lib/format'
 import ComprobanteModal from '../components/ComprobanteModal'
+import { contactosService, type Contacto } from '../services/contactosService'
 
 type ComprobanteUI = {
   id: string
@@ -18,6 +20,7 @@ type ComprobanteUI = {
 
 export default function Transferir() {
   const { cliente, hydrate } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [destino, setDestino] = useState('')
   const [destinoCuit, setDestinoCuit] = useState('')
   const [monto, setMonto] = useState('')
@@ -28,6 +31,9 @@ export default function Transferir() {
   const [walletCvu, setWalletCvu] = useState<string | null>(null)
   const [comprobanteOpen, setComprobanteOpen] = useState(false)
   const [comprobanteData, setComprobanteData] = useState<ComprobanteUI | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [contactos, setContactos] = useState<Contacto[]>([])
+  const [contactoSel, setContactoSel] = useState<Contacto | null>(null)
 
   useEffect(() => {
     if (!cliente) return
@@ -40,6 +46,39 @@ export default function Transferir() {
       if (data) setWalletCvu(data.cvu)
     })()
   }, [cliente])
+
+  useEffect(() => {
+    if (!cliente?.id) return
+    contactosService
+      .list(cliente.id)
+      .then(setContactos)
+      .catch((e) => console.error('[Transferir] contactos load error:', e))
+  }, [cliente?.id])
+
+  useEffect(() => {
+    const id = searchParams.get('contactoId')
+    if (!id || contactos.length === 0) return
+    const c = contactos.find((x) => x.id === id)
+    if (c) applyContacto(c)
+  }, [searchParams, contactos])
+
+  function applyContacto(c: Contacto) {
+    setContactoSel(c)
+    if (c.cvu) setDestino(c.cvu)
+    if (c.cuit) setDestinoCuit(c.cuit)
+    setMsg(null)
+  }
+
+  function clearContacto() {
+    setContactoSel(null)
+    setDestino('')
+    setDestinoCuit('')
+    if (searchParams.get('contactoId')) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('contactoId')
+      setSearchParams(next, { replace: true })
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -133,6 +172,40 @@ export default function Transferir() {
           <span className="text-sm font-bold">{formatARS(Number(cliente.saldo ?? 0))}</span>
         </div>
       )}
+
+      <div className="mb-4">
+        {contactoSel ? (
+          <div className="bg-brand-50 border border-brand-100 rounded-2xl p-3 flex items-center gap-3">
+            <div className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-600 text-white text-sm font-bold">
+              {contactoSel.nombre.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-slate-800 truncate">
+                {contactoSel.nombre}
+              </div>
+              <div className="text-xs text-slate-500 font-mono truncate">
+                {contactoSel.alias ?? maskCBU(contactoSel.cvu)}
+                {contactoSel.cuit ? ` - CUIT ${contactoSel.cuit}` : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={clearContacto}
+              className="text-xs text-brand-700 font-semibold px-2 py-1 hover:bg-white rounded"
+            >
+              Cambiar
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="w-full bg-white border border-dashed border-slate-300 hover:border-brand-500 hover:bg-brand-50 text-sm text-slate-600 hover:text-brand-700 font-semibold py-3 rounded-2xl"
+          >
+            Elegir contacto de la agenda
+          </button>
+        )}
+      </div>
 
       <form
         onSubmit={handleSubmit}
@@ -250,6 +323,123 @@ export default function Transferir() {
         onClose={() => setComprobanteOpen(false)}
         comprobante={comprobanteData}
       />
+
+      {pickerOpen && (
+        <ContactoPicker
+          contactos={contactos}
+          onClose={() => setPickerOpen(false)}
+          onPick={(c) => {
+            applyContacto(c)
+            setPickerOpen(false)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function ContactoPicker({
+  contactos,
+  onClose,
+  onPick,
+}: {
+  contactos: Contacto[]
+  onClose: () => void
+  onPick: (c: Contacto) => void
+}) {
+  const [q, setQ] = useState('')
+  const filtered = contactos.filter((c) => {
+    if (!q.trim()) return true
+    const s = q.toLowerCase()
+    return (
+      c.nombre.toLowerCase().includes(s) ||
+      (c.alias?.toLowerCase().includes(s) ?? false) ||
+      (c.cvu?.includes(s) ?? false) ||
+      (c.titular?.toLowerCase().includes(s) ?? false)
+    )
+  })
+  const favoritos = filtered.filter((c) => c.favorito)
+  const resto = filtered.filter((c) => !c.favorito)
+
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/50 z-50 flex items-end md:items-center justify-center p-0 md:p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white w-full max-w-md rounded-t-2xl md:rounded-2xl p-4 max-h-[85vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-bold">Elegir contacto</h2>
+          <button onClick={onClose} className="text-sm text-slate-500 px-2 py-1">
+            Cerrar
+          </button>
+        </div>
+
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar por nombre, alias o CVU"
+          className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm mb-3 focus:ring-2 focus:ring-brand-500 outline-none"
+        />
+
+        {filtered.length === 0 && (
+          <div className="text-center text-sm text-slate-500 py-8">
+            {contactos.length === 0
+              ? 'Aun no tienes contactos. Agrega uno desde la pagina de Contactos.'
+              : 'Sin resultados.'}
+          </div>
+        )}
+
+        {favoritos.length > 0 && (
+          <div className="mb-2">
+            <div className="text-[11px] uppercase font-semibold text-slate-400 mb-1 px-1">
+              Favoritos
+            </div>
+            <div className="space-y-1">
+              {favoritos.map((c) => (
+                <ContactoRow key={c.id} c={c} onPick={onPick} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {resto.length > 0 && (
+          <div>
+            {favoritos.length > 0 && (
+              <div className="text-[11px] uppercase font-semibold text-slate-400 mb-1 px-1">
+                Todos
+              </div>
+            )}
+            <div className="space-y-1">
+              {resto.map((c) => (
+                <ContactoRow key={c.id} c={c} onPick={onPick} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ContactoRow({ c, onPick }: { c: Contacto; onPick: (c: Contacto) => void }) {
+  return (
+    <button
+      onClick={() => onPick(c)}
+      className="w-full text-left flex items-center gap-3 p-2.5 rounded-lg hover:bg-slate-50"
+    >
+      <div className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex-shrink-0">
+        {c.nombre.charAt(0).toUpperCase()}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold text-slate-800 truncate">{c.nombre}</div>
+        <div className="text-xs text-slate-500 font-mono truncate">
+          {c.alias ?? maskCBU(c.cvu)}
+        </div>
+      </div>
+    </button>
   )
 }

@@ -20,6 +20,7 @@ import Terminos from './pages/Terminos'
 import Privacidad from './pages/Privacidad'
 import Arrepentimiento from './pages/Arrepentimiento'
 import Baja from './pages/Baja'
+import Contactos from './pages/Contactos'
 
 function Protected({ children }: { children: JSX.Element }) {
   const { user, hydrating } = useAuth()
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/movimientos" element={<Movimientos />} />
         <Route path="/comprobantes" element={<Comprobantes />} />
         <Route path="/transferir" element={<Transferir />} />
+        <Route path="/contactos" element={<Contactos />} />
         <Route path="/recibir" element={<RecibirQR />} />
         <Route path="/servicios" element={<Servicios />} />
         <Route path="/tarjetas" element={<Tarjetas />} />

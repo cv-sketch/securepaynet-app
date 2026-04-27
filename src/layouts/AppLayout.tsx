@@ -90,6 +90,13 @@ export default function AppLayout() {
                   Mi perfil
                 </Link>
                 <Link
+                  to="/contactos"
+                  role="menuitem"
+                  className="block px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Contactos
+                </Link>
+                <Link
                   to="/seguridad"
                   role="menuitem"
                   className="block px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
