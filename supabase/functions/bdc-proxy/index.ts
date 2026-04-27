@@ -6,6 +6,7 @@
 // Si el endpoint es sub-account.create y se provee cliente_id, persiste la wallet automaticamente.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { mockLookup } from "../_shared/lookupMock.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -24,7 +25,8 @@ type Endpoint =
   | "sub-account.list"
   | "sub-account.update-label"
   | "transfer.create"
-  | "transfer.list";
+  | "transfer.list"
+  | "account.lookup";
 
 interface ProxyRequest {
   endpoint: Endpoint;
@@ -166,11 +168,22 @@ async function dispatch(endpoint: Endpoint, payload: any) {
         return { status: 200, body: mockCreateTransfer(payload) };
       case "transfer.list":
         return { status: 200, body: mockListTransfers(payload) };
+      case "account.lookup": {
+        const result = await mockLookup(payload as { type: "cbu" | "alias"; value: string });
+        return { status: 200, body: result };
+      }
       default:
         return { status: 400, body: { status: "ERROR", error: { code: "UNKNOWN_ENDPOINT", message: endpoint } } };
     }
   }
-  const map: Record<Endpoint, { path: string; method: string }> = {
+  if (endpoint === "account.lookup") {
+    // live mode: stub hasta tener integracion BDC real
+    return {
+      status: 501,
+      body: { ok: false, code: "UPSTREAM_ERROR", message: "live mode no implementado" },
+    };
+  }
+  const map: Record<Exclude<Endpoint, "account.lookup">, { path: string; method: string }> = {
     "sub-account.create": { path: "/sub-account", method: "POST" },
     "sub-account.list": { path: "/sub-account", method: "GET" },
     "sub-account.update-label": { path: "/sub-account/label", method: "PATCH" },
