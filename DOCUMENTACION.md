@@ -4,7 +4,7 @@
 > **Repo hermano:** `cv-sketch/bdcconecta-dashboard` (panel admin)
 > **Backend compartido:** Supabase project `lkqyzyvfcnfzihhlhuru`
 > **Producción usuario:** https://securepaynet-wallet.vercel.app
-> **Última actualización:** 26/04/2026
+> **Última actualización:** 27/04/2026
 
 ---
 
