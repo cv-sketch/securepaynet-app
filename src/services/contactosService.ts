@@ -13,6 +13,7 @@ export type Contacto = {
   telefono: string | null
   favorito: boolean
   notas: string | null
+  entidad: string | null
   created_at: string
   updated_at: string
 }
@@ -28,6 +29,7 @@ export type ContactoInput = {
   telefono?: string | null
   favorito?: boolean
   notas?: string | null
+  entidad?: string | null
 }
 
 export const contactosService = {
@@ -52,17 +54,19 @@ export const contactosService = {
     return data as Contacto | null
   },
 
-  async create(clienteId: string, input: ContactoInput): Promise<Contacto> {
-    const { data, error } = await supabase
-      .from('contactos')
-      .insert({ cliente_id: clienteId, ...input })
-      .select()
-      .single()
+  async createGated(input: ContactoInput, gateToken: string): Promise<Contacto> {
+    const { data, error } = await supabase.rpc('contactos_create_gated', {
+      input,
+      gate_token: gateToken,
+    })
     if (error) throw error
     return data as Contacto
   },
 
-  async update(id: string, input: Partial<ContactoInput>): Promise<Contacto> {
+  async update(
+    id: string,
+    input: Partial<Pick<ContactoInput, 'nombre' | 'alias' | 'favorito' | 'notas'>>,
+  ): Promise<Contacto> {
     const { data, error } = await supabase
       .from('contactos')
       .update(input)
@@ -73,16 +77,16 @@ export const contactosService = {
     return data as Contacto
   },
 
-  async remove(id: string): Promise<void> {
-    const { error } = await supabase.from('contactos').delete().eq('id', id)
+  async removeGated(id: string, gateToken: string): Promise<void> {
+    const { error } = await supabase.rpc('contactos_remove_gated', {
+      contacto_id: id,
+      gate_token: gateToken,
+    })
     if (error) throw error
   },
 
   async toggleFavorito(id: string, favorito: boolean): Promise<void> {
-    const { error } = await supabase
-      .from('contactos')
-      .update({ favorito })
-      .eq('id', id)
+    const { error } = await supabase.from('contactos').update({ favorito }).eq('id', id)
     if (error) throw error
   },
 }
