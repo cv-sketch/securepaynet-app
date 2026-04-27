@@ -1,5 +1,5 @@
-﻿import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 
 export default function Login() {
@@ -32,7 +32,22 @@ export default function Login() {
   }
 
   const handlePasskey = async () => {
-    setError('Passkeys: proximamente disponible. Usa email y contraseña por ahora.')
+    if (!email.trim()) {
+      setError('Tipea tu email primero')
+      return
+    }
+    setError(null); setLoading(true)
+    try {
+      await useAuth.getState().signInWithPasskey(email.trim())
+      nav('/', { replace: true })
+    } catch (err: any) {
+      const msg = err.message === 'CLONED_CREDENTIAL'
+        ? 'Passkey invalida. Contactá soporte.'
+        : (err.message ?? 'No se pudo ingresar con passkey')
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -47,26 +62,20 @@ export default function Login() {
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
             <input
-              type="email"
-              required
-              value={email}
+              type="email" required value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
-              placeholder="tu@email.com"
-              autoComplete="email"
+              placeholder="tu@email.com" autoComplete="email"
             />
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">Contrasena</label>
             <input
-              type="password"
-              required
-              value={password}
+              type="password" required value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
-              placeholder="contrasena"
-              autoComplete="current-password"
+              placeholder="contrasena" autoComplete="current-password"
             />
           </div>
 
@@ -77,8 +86,7 @@ export default function Login() {
           )}
 
           <button
-            type="submit"
-            disabled={loading}
+            type="submit" disabled={loading}
             className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
           >
             {loading ? 'Ingresando...' : 'Ingresar'}
@@ -93,13 +101,17 @@ export default function Login() {
               <div className="flex-1 h-px bg-slate-200" />
             </div>
             <button
-              onClick={handlePasskey}
-              className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2"
+              onClick={handlePasskey} disabled={loading}
+              className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <span>Llave</span> Ingresar con passkey
+              {loading ? 'Verificando…' : 'Ingresar con passkey'}
             </button>
           </>
         )}
+
+        <Link to="/signup" className="block text-center text-xs text-brand-600 hover:underline mt-4">
+          No tengo cuenta — Crear cuenta
+        </Link>
 
         <div className="mt-6 text-center text-xs text-slate-400">
           SecurePayNet S.A. - PSPCP registrado en BCRA

@@ -72,4 +72,22 @@ export const passkeyService = {
     }
     return { gateToken: data.gateToken }
   },
+
+  async loginBegin(email: string): Promise<{ options: any }> {
+    const { data, error } = await supabase.functions.invoke('passkey-login-begin', { body: { email } })
+    if (error || !data?.ok) throw new Error(error?.message ?? data?.message ?? 'Login begin failed')
+    return { options: data.options }
+  },
+
+  async loginFinish(email: string, credential: any): Promise<{ hashedToken: string }> {
+    const { data, error } = await supabase.functions.invoke('passkey-login-finish', {
+      body: { email, credential },
+    })
+    if (error || !data?.ok) {
+      const code = data?.code ?? 'AUTH_FAILED'
+      if (code === 'CLONED_CREDENTIAL') throw new Error('CLONED_CREDENTIAL')
+      throw new Error(error?.message ?? data?.message ?? 'Auth failed')
+    }
+    return { hashedToken: data.hashed_token }
+  },
 }

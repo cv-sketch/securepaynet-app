@@ -1,0 +1,249 @@
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useAuth } from '../store/useAuth'
+import { onboardingService } from '../services/onboardingService'
+import { passkeyService } from '../services/passkeyService'
+
+type Step =
+  | { kind: 'choose-method' }
+  | { kind: 'email-password-form' }
+  | { kind: 'verify-otp'; email: string }
+  | { kind: 'completing-onboarding' }
+  | { kind: 'passkey-prompt' }
+  | { kind: 'done' }
+
+export default function Signup() {
+  const nav = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { signUpWithEmail, verifyEmailOtp, signInWithGoogle, user } = useAuth()
+  const [step, setStep] = useState<Step>({ kind: 'choose-method' })
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [otpCode, setOtpCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [passkeySupported, setPasskeySupported] = useState(false)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.PublicKeyCredential) setPasskeySupported(true)
+  }, [])
+
+  // Si volvemos de Google OAuth con ?step=onboarding, saltar a completing
+  useEffect(() => {
+    if (searchParams.get('step') === 'onboarding' && user) {
+      setStep({ kind: 'completing-onboarding' })
+    }
+  }, [searchParams, user])
+
+  // Trigger onboarding-complete cuando entramos a ese step
+  useEffect(() => {
+    if (step.kind === 'completing-onboarding') {
+      ;(async () => {
+        try {
+          await onboardingService.completeOnboarding()
+          if (typeof window !== 'undefined') window.sessionStorage?.removeItem('onboarding-pending')
+          setStep({ kind: 'passkey-prompt' })
+        } catch (err: any) {
+          setError(err.message ?? 'Error completando onboarding')
+        }
+      })()
+    }
+  }, [step.kind])
+
+  // Cuando llegamos a 'done', redirigir
+  useEffect(() => {
+    if (step.kind === 'done') nav('/', { replace: true })
+  }, [step.kind, nav])
+
+  const handleGoogle = async () => {
+    setError(null); setLoading(true)
+    try { await signInWithGoogle() } catch (err: any) {
+      setError(err.message ?? 'Error con Google')
+      setLoading(false)
+    }
+    // sigue en redirect
+  }
+
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null); setLoading(true)
+    try {
+      await signUpWithEmail(email, password)
+      setStep({ kind: 'verify-otp', email })
+    } catch (err: any) {
+      setError(err.message ?? 'Error creando cuenta')
+    } finally { setLoading(false) }
+  }
+
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (step.kind !== 'verify-otp') return
+    setError(null); setLoading(true)
+    try {
+      await verifyEmailOtp(step.email, otpCode)
+      setStep({ kind: 'passkey-prompt' })
+    } catch (err: any) {
+      setError(err.message ?? 'Codigo invalido')
+    } finally { setLoading(false) }
+  }
+
+  const handleResendOtp = async () => {
+    if (step.kind !== 'verify-otp') return
+    setError(null); setLoading(true)
+    try {
+      await onboardingService.resendEmailOtp(step.email)
+      setError('Codigo reenviado, revisa tu mail')
+    } catch (err: any) {
+      setError(err.message ?? 'Error reenviando codigo')
+    } finally { setLoading(false) }
+  }
+
+  const handleActivatePasskey = async () => {
+    setError(null); setLoading(true)
+    try {
+      await passkeyService.registerCurrentDevice()
+      setStep({ kind: 'done' })
+    } catch (err: any) {
+      setError(err.message ?? 'No se pudo activar la passkey')
+    } finally { setLoading(false) }
+  }
+
+  const handleSkipPasskey = () => setStep({ kind: 'done' })
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-brand-600 to-brand-700 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl p-6 shadow-xl">
+        <div className="text-center mb-6">
+          <div className="text-3xl font-bold text-brand-600">SecurePayNet</div>
+          <div className="text-sm text-slate-500 mt-1">Crear cuenta nueva</div>
+        </div>
+
+        {step.kind === 'choose-method' && (
+          <div className="space-y-3">
+            <button
+              onClick={handleGoogle}
+              disabled={loading}
+              className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg disabled:opacity-50"
+            >
+              {loading ? 'Conectando…' : 'Continuar con Google'}
+            </button>
+            <div className="my-4 flex items-center gap-2 text-xs text-slate-400">
+              <div className="flex-1 h-px bg-slate-200" />
+              <span>o</span>
+              <div className="flex-1 h-px bg-slate-200" />
+            </div>
+            <button
+              onClick={() => setStep({ kind: 'email-password-form' })}
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg"
+            >
+              Email y contrasena
+            </button>
+          </div>
+        )}
+
+        {step.kind === 'email-password-form' && (
+          <form onSubmit={handleEmailSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
+              <input
+                type="email" required value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none"
+                placeholder="tu@email.com" autoComplete="email"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Contrasena</label>
+              <input
+                type="password" required value={password} minLength={6}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none"
+                placeholder="al menos 6 caracteres" autoComplete="new-password"
+              />
+            </div>
+            <button
+              type="submit" disabled={loading}
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+            >
+              {loading ? 'Creando…' : 'Crear cuenta'}
+            </button>
+            <button type="button" onClick={() => setStep({ kind: 'choose-method' })}
+              className="w-full text-xs text-slate-500 hover:underline">
+              Volver
+            </button>
+          </form>
+        )}
+
+        {step.kind === 'verify-otp' && (
+          <form onSubmit={handleOtpSubmit} className="space-y-4">
+            <div className="text-sm text-slate-700">
+              Te enviamos un codigo a <strong>{step.email}</strong>. Revisa tu inbox (y spam).
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Codigo de 6 digitos</label>
+              <input
+                type="text" required value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-center text-lg tracking-widest focus:ring-2 focus:ring-brand-500 outline-none"
+                placeholder="123456" inputMode="numeric" maxLength={6}
+              />
+            </div>
+            <button
+              type="submit" disabled={loading || otpCode.length !== 6}
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+            >
+              {loading ? 'Verificando…' : 'Verificar'}
+            </button>
+            <button type="button" onClick={handleResendOtp} disabled={loading}
+              className="w-full text-xs text-brand-600 hover:underline">
+              Reenviar codigo
+            </button>
+          </form>
+        )}
+
+        {step.kind === 'completing-onboarding' && (
+          <div className="text-center text-sm text-slate-600 py-8">
+            Configurando tu cuenta…
+          </div>
+        )}
+
+        {step.kind === 'passkey-prompt' && (
+          <div className="space-y-4">
+            <div className="text-sm text-slate-700">
+              <div className="font-semibold mb-1">Activar acceso rapido</div>
+              <div>La proxima vez ingresa con tu huella o cara, sin contrasena.</div>
+            </div>
+            {passkeySupported ? (
+              <button
+                onClick={handleActivatePasskey} disabled={loading}
+                className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+              >
+                {loading ? 'Activando…' : 'Activar passkey'}
+              </button>
+            ) : (
+              <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-2">
+                Tu dispositivo no soporta passkeys. Podes ingresar con email y contrasena.
+              </div>
+            )}
+            <button onClick={handleSkipPasskey}
+              className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg">
+              Mas tarde
+            </button>
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-4 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-6 text-center">
+          <Link to="/login" className="text-xs text-slate-500 hover:underline">
+            Ya tengo cuenta — Ingresar
+          </Link>
+        </div>
+      </div>
+    </div>
+  )
+}
