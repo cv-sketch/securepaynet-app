@@ -4,11 +4,14 @@ import { useAuth } from '../store/useAuth'
 import { onboardingService } from '../services/onboardingService'
 import { isValidCuit, normalizeCuit, formatCuit } from '../lib/cuit'
 
+const PENDING_CUIT_KEY = 'pending-signup-cuit'
+
 type Step =
   | { kind: 'choose-method' }
+  | { kind: 'google-cuit-form' }
   | { kind: 'email-password-form' }
-  | { kind: 'verify-otp'; email: string }
-  | { kind: 'collect-cuit' }
+  | { kind: 'verify-otp'; email: string; cuit: string }
+  | { kind: 'collect-cuit' } // fallback si volvemos de Google sin CUIT guardado
   | { kind: 'finalizing'; cuit: string }
 
 export default function Signup() {
@@ -26,14 +29,21 @@ export default function Signup() {
   const [error, setError] = useState<string | null>(null)
   const [emailExists, setEmailExists] = useState(false)
 
-  // Si volvemos de Google OAuth con ?step=oauth-return -> pedir CUIT.
+  // Volvemos de Google OAuth: si hay CUIT guardado en sessionStorage,
+  // pasamos directo a finalizing. Si no, fallback a collect-cuit.
   useEffect(() => {
-    if (searchParams.get('step') === 'oauth-return' && user) {
+    if (searchParams.get('step') !== 'oauth-return' || !user) return
+    const stored = typeof window !== 'undefined'
+      ? window.sessionStorage?.getItem(PENDING_CUIT_KEY) ?? null
+      : null
+    if (stored && isValidCuit(stored)) {
+      setStep({ kind: 'finalizing', cuit: normalizeCuit(stored) })
+    } else {
       setStep({ kind: 'collect-cuit' })
     }
   }, [searchParams, user])
 
-  // 'finalizing' = ejecuta completeOnboarding con CUIT, signOut, redirect.
+  // 'finalizing' = call completeOnboarding con CUIT, signOut, redirect.
   useEffect(() => {
     if (step.kind !== 'finalizing') return
     const cuitToSubmit = step.cuit
@@ -45,13 +55,21 @@ export default function Signup() {
         setStep({ kind: 'collect-cuit' })
         return
       }
+      if (typeof window !== 'undefined') window.sessionStorage?.removeItem(PENDING_CUIT_KEY)
       await signOut()
       nav('/login?from=signup', { replace: true })
     })()
   }, [step, signOut, nav])
 
-  const handleGoogle = async () => {
-    setError(null); setLoading(true)
+  const handleGoogleCuitSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    const c1 = normalizeCuit(cuit)
+    const c2 = normalizeCuit(confirmCuit)
+    if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
+    if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
+    if (typeof window !== 'undefined') window.sessionStorage?.setItem(PENDING_CUIT_KEY, c1)
+    setLoading(true)
     try {
       await signInWithGoogleSignup()
     } catch (err: any) {
@@ -63,18 +81,16 @@ export default function Signup() {
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null); setEmailExists(false)
-    if (password.length < 6) {
-      setError('La contraseña debe tener al menos 6 caracteres')
-      return
-    }
-    if (password !== confirmPassword) {
-      setError('Las contraseñas no coinciden')
-      return
-    }
+    const c1 = normalizeCuit(cuit)
+    const c2 = normalizeCuit(confirmCuit)
+    if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
+    if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
+    if (password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
+    if (password !== confirmPassword) { setError('Las contraseñas no coinciden'); return }
     setLoading(true)
     try {
       await signUpWithEmail(email, password)
-      setStep({ kind: 'verify-otp', email })
+      setStep({ kind: 'verify-otp', email, cuit: c1 })
     } catch (err: any) {
       if (err?.code === 'USER_ALREADY_EXISTS') {
         setEmailExists(true)
@@ -90,7 +106,7 @@ export default function Signup() {
     setError(null); setLoading(true)
     try {
       await verifyEmailOtp(step.email, otpCode)
-      setStep({ kind: 'collect-cuit' })
+      setStep({ kind: 'finalizing', cuit: step.cuit })
     } catch (err: any) {
       setError(err.message ?? 'Codigo invalido o expirado (vence en 3 min)')
     } finally { setLoading(false) }
@@ -107,13 +123,13 @@ export default function Signup() {
     } finally { setLoading(false) }
   }
 
-  const handleCuitSubmit = async (e: React.FormEvent) => {
+  const handleFallbackCuitSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     const c1 = normalizeCuit(cuit)
     const c2 = normalizeCuit(confirmCuit)
     if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
-    if (!isValidCuit(c1)) { setError('CUIT invalido. Verificá los 11 dígitos.'); return }
+    if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
     setStep({ kind: 'finalizing', cuit: c1 })
   }
 
@@ -128,7 +144,7 @@ export default function Signup() {
         {step.kind === 'choose-method' && (
           <div className="space-y-3">
             <button
-              onClick={handleGoogle}
+              onClick={() => setStep({ kind: 'google-cuit-form' })}
               disabled={loading}
               className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
             >
@@ -138,7 +154,7 @@ export default function Signup() {
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
               </svg>
-              {loading ? 'Conectando…' : 'Continuar con Google'}
+              Continuar con Google
             </button>
             <div className="my-4 flex items-center gap-2 text-xs text-slate-400">
               <div className="flex-1 h-px bg-slate-200" />
@@ -152,6 +168,42 @@ export default function Signup() {
               Email y contrasena
             </button>
           </div>
+        )}
+
+        {step.kind === 'google-cuit-form' && (
+          <form onSubmit={handleGoogleCuitSubmit} className="space-y-4">
+            <div className="text-sm text-slate-700">
+              Para continuar con Google, ingresá tu <strong>CUIT</strong> (11 dígitos).
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">CUIT</label>
+              <input
+                type="text" required value={formatCuit(cuit)}
+                onChange={(e) => setCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="20-12345678-9" inputMode="numeric"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Confirmar CUIT</label>
+              <input
+                type="text" required value={formatCuit(confirmCuit)}
+                onChange={(e) => setConfirmCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="repetí tu CUIT" inputMode="numeric"
+              />
+            </div>
+            <button
+              type="submit" disabled={loading}
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+            >
+              {loading ? 'Conectando…' : 'Continuar con Google'}
+            </button>
+            <button type="button" onClick={() => setStep({ kind: 'choose-method' })}
+              className="w-full text-xs text-slate-500 hover:underline">
+              Volver
+            </button>
+          </form>
         )}
 
         {step.kind === 'email-password-form' && (
@@ -172,6 +224,24 @@ export default function Signup() {
                 onChange={(e) => { setEmail(e.target.value); setEmailExists(false) }}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none"
                 placeholder="tu@email.com" autoComplete="email"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">CUIT</label>
+              <input
+                type="text" required value={formatCuit(cuit)}
+                onChange={(e) => setCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="20-12345678-9" inputMode="numeric"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Confirmar CUIT</label>
+              <input
+                type="text" required value={formatCuit(confirmCuit)}
+                onChange={(e) => setConfirmCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="repetí tu CUIT" inputMode="numeric"
               />
             </div>
             <div>
@@ -233,9 +303,9 @@ export default function Signup() {
         )}
 
         {step.kind === 'collect-cuit' && (
-          <form onSubmit={handleCuitSubmit} className="space-y-4">
+          <form onSubmit={handleFallbackCuitSubmit} className="space-y-4">
             <div className="text-sm text-slate-700">
-              Ingresá tu <strong>CUIT</strong> (11 dígitos). Es obligatorio para crear la cuenta.
+              Necesitamos tu <strong>CUIT</strong> para terminar de crear la cuenta.
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">CUIT</label>
@@ -257,7 +327,7 @@ export default function Signup() {
             </div>
             <button
               type="submit"
-              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg"
             >
               Confirmar
             </button>
