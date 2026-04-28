@@ -1,6 +1,11 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { formatARS, formatDateAR } from '../lib/format'
-import { generateComprobantePdf, comprobanteFilename, type ComprobanteData } from '../lib/comprobantePdf'
+import {
+  generateComprobantePdf,
+  generateComprobanteImage,
+  comprobanteFilename,
+  type ComprobanteData,
+} from '../lib/comprobantePdf'
 
 type Props = {
   open: boolean
@@ -10,7 +15,6 @@ type Props = {
 }
 
 export default function ComprobanteModal({ open, onClose, comprobante, onNewTransfer }: Props) {
-  const cardRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<'pdf' | 'share' | null>(null)
   const [hint, setHint] = useState<string | null>(null)
 
@@ -29,18 +33,11 @@ export default function ComprobanteModal({ open, onClose, comprobante, onNewTran
   }
 
   const handleShare = async () => {
-    if (!cardRef.current) return
     setBusy('share'); setHint(null)
     try {
-      const html2canvas = (await import('html2canvas')).default
-      const canvas = await html2canvas(cardRef.current, {
-        backgroundColor: '#ffffff',
-        scale: 2,
-      })
-      const blob: Blob | null = await new Promise((res) =>
-        canvas.toBlob(res, 'image/png')
-      )
-      if (!blob) throw new Error('canvas.toBlob fallo')
+      // Generamos la imagen programaticamente (Canvas 2D), no html2canvas.
+      // Tamano controlado, sin riesgo de layout corrompido o "explotado".
+      const blob = await generateComprobanteImage(comprobante)
 
       const filename = comprobanteFilename(comprobante, 'png')
       const file = new File([blob], filename, { type: 'image/png' })
@@ -104,7 +101,7 @@ export default function ComprobanteModal({ open, onClose, comprobante, onNewTran
         </div>
 
         {/* Tarjeta capturable: sólo este bloque va al PNG/share */}
-        <div ref={cardRef} className="bg-white">
+        <div className="bg-white">
           <div className="text-center mb-5 pb-5 border-b border-dashed">
             <div className="text-3xl mb-2">✅</div>
             <div className="text-xs text-slate-500">Operación exitosa</div>

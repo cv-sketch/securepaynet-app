@@ -31,14 +31,18 @@ export default function Transferir() {
   const [comprobanteData, setComprobanteData] = useState<ComprobanteUI | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [contactos, setContactos] = useState<Contacto[]>([])
+  const [contactosLoaded, setContactosLoaded] = useState(false)
   const [contactoSel, setContactoSel] = useState<Contacto | null>(null)
 
   useEffect(() => {
     if (!cliente?.id) return
     contactosService
       .list(cliente.id)
-      .then(setContactos)
-      .catch((e) => console.error('[Transferir] contactos load error:', e))
+      .then((list) => { setContactos(list); setContactosLoaded(true) })
+      .catch((e) => {
+        console.error('[Transferir] contactos load error:', e)
+        setContactosLoaded(true)
+      })
   }, [cliente?.id])
 
   useEffect(() => {
@@ -169,6 +173,8 @@ export default function Transferir() {
               </button>
             </div>
           </div>
+        ) : !contactosLoaded ? (
+          <div className="w-full h-12 bg-slate-100 rounded-2xl animate-pulse" />
         ) : contactos.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-4 text-center">
             <p className="text-sm text-slate-600 mb-3">
@@ -182,13 +188,21 @@ export default function Transferir() {
             </Link>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setPickerOpen(true)}
-            className="w-full bg-white border border-dashed border-slate-300 hover:border-brand-500 hover:bg-brand-50 text-sm text-slate-600 hover:text-brand-700 font-semibold py-3 rounded-2xl"
-          >
-            Elegir contacto de la agenda
-          </button>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              className="w-full bg-white border border-dashed border-slate-300 hover:border-brand-500 hover:bg-brand-50 text-sm text-slate-600 hover:text-brand-700 font-semibold py-3 rounded-2xl"
+            >
+              Elegir contacto de la agenda
+            </button>
+            <Link
+              to="/contactos"
+              className="block text-center text-xs text-brand-700 font-semibold py-1 hover:underline"
+            >
+              + Agendar nuevo contacto
+            </Link>
+          </div>
         )}
       </div>
 
