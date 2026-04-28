@@ -3,11 +3,16 @@
 // El guard en <Protected> (App.tsx) redirige aca despues de hidratar si pin_set
 // es false. Tambien usado como destino post-Signup en algun edge case.
 // Consumido por: App.tsx (route /pin-setup).
-import { useNavigate } from 'react-router-dom'
 import PinSetupForm from '../components/PinSetupForm'
 
 export default function PinSetup() {
-  const nav = useNavigate()
+  // Hard reload after PIN set: React Router 6 reuses the same <Protected>
+  // instance across /pin-setup and /, so the cached pinSet=false state would
+  // bounce the user back here. A full reload resets that cache cleanly.
+  const handleComplete = () => {
+    window.location.replace('/')
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-brand-600 to-brand-700 flex items-center justify-center p-4">
       <div className="w-full max-w-sm bg-white rounded-2xl p-6 shadow-xl">
@@ -22,7 +27,7 @@ export default function PinSetup() {
           confirme con biometria.
         </p>
 
-        <PinSetupForm mode="initial" onComplete={() => nav('/', { replace: true })} />
+        <PinSetupForm mode="initial" onComplete={handleComplete} />
 
         <p className="text-[11px] text-slate-400 text-center mt-4">
           Si lo olvidas podes recuperarlo desde el modal de PIN con &quot;Olvide mi PIN&quot;.
