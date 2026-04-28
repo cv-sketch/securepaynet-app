@@ -33,8 +33,11 @@ export type HeartbeatResult =
   | { ok: true; idle_remaining_seconds: number; absolute_remaining_seconds: number }
   | { ok: false; expired: 'idle' | 'absolute' | 'revoked' }
 
-export async function sessionHeartbeat(sessionId: string): Promise<HeartbeatResult> {
-  const r = await authedFetch('/session-heartbeat', { session_id: sessionId })
+export async function sessionHeartbeat(
+  sessionId: string,
+  slide = false,
+): Promise<HeartbeatResult> {
+  const r = await authedFetch('/session-heartbeat', { session_id: sessionId, slide })
   if (r.status === 401) {
     const body = await r.json().catch(() => ({}))
     if (body?.expired) return { ok: false, expired: body.expired }

@@ -14,9 +14,11 @@ Deno.serve(async (req) => {
   if (!authHeader) return jsonErr(401, 'unauthenticated')
 
   let sessionId: string
+  let slide: boolean
   try {
     const body = await req.json()
     sessionId = String(body?.session_id ?? '')
+    slide = body?.slide === true
   } catch {
     return jsonErr(400, 'invalid body')
   }
@@ -62,24 +64,32 @@ Deno.serve(async (req) => {
     return jsonExpired(401, 'idle')
   }
 
-  // Sesión vigente: refrescar last_activity_at (sliding session).
-  await admin.from('user_sessions').update({ last_activity_at: new Date(now).toISOString() }).eq('id', session.id)
+  // Sesión vigente. Sólo refrescamos last_activity_at cuando el cliente pasa
+  // slide:true (eventos reales de actividad). El polling pasivo NO desliza, si
+  // no la sesión nunca expira por inactividad.
+  if (slide) {
+    await admin
+      .from('user_sessions')
+      .update({ last_activity_at: new Date(now).toISOString() })
+      .eq('id', session.id)
+  }
   await admin.from('session_audit_log').insert({
     session_id: session.id,
     user_id: userId,
-    event: 'heartbeat',
+    event: slide ? 'activity' : 'heartbeat',
     ip,
     user_agent: userAgent,
   })
 
-  // Después del refresh el contador idle reinicia a su valor configurado (sliding).
-  const idleRemainingAfterRefresh = session.idle_timeout_seconds
+  const idleRemaining = slide
+    ? session.idle_timeout_seconds
+    : Math.max(0, Math.floor((idleDeadline - now) / 1000))
   const absoluteRemaining = Math.floor((absoluteExpires - now) / 1000)
 
   return new Response(
     JSON.stringify({
       ok: true,
-      idle_remaining_seconds: idleRemainingAfterRefresh,
+      idle_remaining_seconds: idleRemaining,
       absolute_remaining_seconds: absoluteRemaining,
     }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
