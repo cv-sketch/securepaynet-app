@@ -1,8 +1,9 @@
-﻿import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { useEffect } from 'react'
+﻿import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { useAuth } from './store/useAuth'
 import SessionExpiryModal from './components/SessionExpiryModal'
 import { useSessionTimeout } from './hooks/useSessionTimeout'
+import { getPinStatus } from './lib/pinApi'
 import AppLayout from './layouts/AppLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -24,11 +25,16 @@ import Arrepentimiento from './pages/Arrepentimiento'
 import Baja from './pages/Baja'
 import Contactos from './pages/Contactos'
 import Signup from './pages/Signup'
+import PinSetup from './pages/PinSetup'
+
+type PinGate = { checked: boolean; pinSet: boolean | null }
 
 function Protected({ children }: { children: JSX.Element }) {
   const { user, hydrating, sessionId, signOut } = useAuth()
   const nav = useNavigate()
+  const location = useLocation()
   const { idleRemaining, showWarning, expiredReason, refresh } = useSessionTimeout(sessionId)
+  const [pin, setPin] = useState<PinGate>({ checked: false, pinSet: null })
 
   useEffect(() => {
     if (!expiredReason) return
@@ -38,8 +44,32 @@ function Protected({ children }: { children: JSX.Element }) {
     })()
   }, [expiredReason, signOut, nav])
 
+  useEffect(() => {
+    if (!user || hydrating) return
+    if (pin.checked) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const s = await getPinStatus()
+        if (!cancelled) setPin({ checked: true, pinSet: s.pin_set })
+      } catch {
+        // Fail-open: don't block on a transient pin-status outage.
+        if (!cancelled) setPin({ checked: true, pinSet: null })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [user, hydrating, pin.checked])
+
   if (hydrating) return <div className="p-8 text-center text-slate-500">Cargando…</div>
   if (!user) return <Navigate to="/login" replace />
+  if (!pin.checked) return <div className="p-8 text-center text-slate-500">Verificando seguridad…</div>
+
+  if (pin.pinSet === false && location.pathname !== '/pin-setup') {
+    return <Navigate to="/pin-setup" replace />
+  }
+  if (pin.pinSet === true && location.pathname === '/pin-setup') {
+    return <Navigate to="/" replace />
+  }
 
   return (
     <>
@@ -65,6 +95,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/pin-setup" element={<Protected><PinSetup /></Protected>} />
       <Route element={<Protected><AppLayout /></Protected>}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/movimientos" element={<Movimientos />} />
