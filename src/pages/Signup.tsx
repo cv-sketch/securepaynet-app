@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 import { onboardingService } from '../services/onboardingService'
+import { isValidCuit, normalizeCuit, formatCuit } from '../lib/cuit'
 
 type Step =
   | { kind: 'choose-method' }
   | { kind: 'email-password-form' }
   | { kind: 'verify-otp'; email: string }
-  | { kind: 'finalizing' }
+  | { kind: 'collect-cuit' }
+  | { kind: 'finalizing'; cuit: string }
 
 export default function Signup() {
   const nav = useNavigate()
@@ -17,35 +19,36 @@ export default function Signup() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [cuit, setCuit] = useState('')
+  const [confirmCuit, setConfirmCuit] = useState('')
   const [otpCode, setOtpCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [emailExists, setEmailExists] = useState(false)
 
-  // Si volvemos de Google OAuth con ?step=oauth-return, finalizar.
+  // Si volvemos de Google OAuth con ?step=oauth-return -> pedir CUIT.
   useEffect(() => {
     if (searchParams.get('step') === 'oauth-return' && user) {
-      setStep({ kind: 'finalizing' })
+      setStep({ kind: 'collect-cuit' })
     }
   }, [searchParams, user])
 
-  // 'finalizing' = cliente creado (via recovery o verifyOtp) -> signOut -> /login.
-  // Nunca dejamos al user dentro de la app desde signup.
+  // 'finalizing' = ejecuta completeOnboarding con CUIT, signOut, redirect.
   useEffect(() => {
     if (step.kind !== 'finalizing') return
+    const cuitToSubmit = step.cuit
     ;(async () => {
       try {
-        // Idempotente: si ya existe cliente, no hace nada nuevo.
-        await onboardingService.completeOnboarding()
+        await onboardingService.completeOnboarding(cuitToSubmit)
       } catch (err: any) {
         setError(err.message ?? 'Error finalizando registro')
+        setStep({ kind: 'collect-cuit' })
         return
       }
-      if (typeof window !== 'undefined') window.sessionStorage?.removeItem('onboarding-pending')
       await signOut()
       nav('/login?from=signup', { replace: true })
     })()
-  }, [step.kind, signOut, nav])
+  }, [step, signOut, nav])
 
   const handleGoogle = async () => {
     setError(null); setLoading(true)
@@ -87,7 +90,7 @@ export default function Signup() {
     setError(null); setLoading(true)
     try {
       await verifyEmailOtp(step.email, otpCode)
-      setStep({ kind: 'finalizing' })
+      setStep({ kind: 'collect-cuit' })
     } catch (err: any) {
       setError(err.message ?? 'Codigo invalido o expirado (vence en 3 min)')
     } finally { setLoading(false) }
@@ -102,6 +105,16 @@ export default function Signup() {
     } catch (err: any) {
       setError(err.message ?? 'Error reenviando codigo')
     } finally { setLoading(false) }
+  }
+
+  const handleCuitSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    const c1 = normalizeCuit(cuit)
+    const c2 = normalizeCuit(confirmCuit)
+    if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
+    if (!isValidCuit(c1)) { setError('CUIT invalido. Verificá los 11 dígitos.'); return }
+    setStep({ kind: 'finalizing', cuit: c1 })
   }
 
   return (
@@ -219,9 +232,41 @@ export default function Signup() {
           </form>
         )}
 
+        {step.kind === 'collect-cuit' && (
+          <form onSubmit={handleCuitSubmit} className="space-y-4">
+            <div className="text-sm text-slate-700">
+              Ingresá tu <strong>CUIT</strong> (11 dígitos). Es obligatorio para crear la cuenta.
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">CUIT</label>
+              <input
+                type="text" required value={formatCuit(cuit)}
+                onChange={(e) => setCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="20-12345678-9" inputMode="numeric"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Confirmar CUIT</label>
+              <input
+                type="text" required value={formatCuit(confirmCuit)}
+                onChange={(e) => setConfirmCuit(normalizeCuit(e.target.value).slice(0, 11))}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none tracking-widest"
+                placeholder="repetí tu CUIT" inputMode="numeric"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
+            >
+              Confirmar
+            </button>
+          </form>
+        )}
+
         {step.kind === 'finalizing' && (
           <div className="text-center text-sm text-slate-600 py-8">
-            Cuenta creada. Redirigiendo al login…
+            Creando cuenta… te llevamos al login.
           </div>
         )}
 

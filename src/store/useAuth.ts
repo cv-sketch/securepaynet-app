@@ -4,6 +4,9 @@ import { onboardingService } from '../services/onboardingService'
 import { passkeyService } from '../services/passkeyService'
 import { authenticateCredential } from '../lib/webauthn'
 
+// Onboarding ahora requiere CUIT del usuario via formulario en /signup;
+// no puede ejecutarse automaticamente desde el listener de auth.
+
 type Cliente = {
   id: string
   nombre: string | null
@@ -31,8 +34,6 @@ type State = {
   signInWithGoogleSignup: () => Promise<void>
   signInWithPasskey: (email: string) => Promise<void>
 }
-
-const ONBOARDING_FLAG = 'onboarding-pending'
 
 async function loadCliente(authUserId: string): Promise<Cliente | null> {
   try {
@@ -76,22 +77,6 @@ async function loadCliente(authUserId: string): Promise<Cliente | null> {
   }
 }
 
-async function loadClienteWithRecovery(authUserId: string): Promise<Cliente | null> {
-  let cli = await loadCliente(authUserId)
-  if (cli) return cli
-  // Recovery: solo si vinimos de un flow de signup colgado
-  if (typeof window !== 'undefined' && window.sessionStorage?.getItem(ONBOARDING_FLAG)) {
-    try {
-      await onboardingService.completeOnboarding()
-      window.sessionStorage.removeItem(ONBOARDING_FLAG)
-      cli = await loadCliente(authUserId)
-    } catch (err) {
-      console.error('[loadClienteWithRecovery] completeOnboarding failed:', err)
-    }
-  }
-  return cli
-}
-
 export const useAuth = create<State>((set) => ({
   user: null,
   cliente: null,
@@ -104,7 +89,7 @@ export const useAuth = create<State>((set) => ({
         set({ user: null, cliente: null, hydrating: false })
         return
       }
-      const cliente = await loadClienteWithRecovery(session.user.id)
+      const cliente = await loadCliente(session.user.id)
       set({
         user: { id: session.user.id, email: session.user.email ?? '' },
         cliente,
@@ -120,7 +105,7 @@ export const useAuth = create<State>((set) => ({
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return { error: error.message }
     if (data.user) {
-      const cliente = await loadClienteWithRecovery(data.user.id)
+      const cliente = await loadCliente(data.user.id)
       set({
         user: { id: data.user.id, email: data.user.email ?? '' },
         cliente,
@@ -131,33 +116,25 @@ export const useAuth = create<State>((set) => ({
 
   signOut: async () => {
     await supabase.auth.signOut()
-    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
     set({ user: null, cliente: null })
   },
 
   signUpWithEmail: async (email, password) => {
-    if (typeof window !== 'undefined') window.sessionStorage?.setItem(ONBOARDING_FLAG, '1')
     await onboardingService.signUpWithEmail(email, password)
   },
 
+  // verifyOtp NO llama a completeOnboarding. Signup.tsx lo hace
+  // explicitamente despues de pedir el CUIT al usuario.
   verifyEmailOtp: async (email, code) => {
     await onboardingService.verifyEmailOtp(email, code)
-    await onboardingService.completeOnboarding()
-    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
   },
 
-  // LOGIN: NO setea ONBOARDING_FLAG. Si el user no tiene cliente, Login.tsx
-  // lo expulsa con error. Nunca crea cuenta automaticamente desde /login.
   signInWithGoogleLogin: async () => {
-    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
     const redirectTo = `${window.location.origin}/login`
     await onboardingService.signInWithGoogle(redirectTo)
   },
 
-  // SIGNUP: setea ONBOARDING_FLAG para que loadClienteWithRecovery cree el
-  // cliente. Despues Signup.tsx hace signOut y manda al user a /login.
   signInWithGoogleSignup: async () => {
-    if (typeof window !== 'undefined') window.sessionStorage?.setItem(ONBOARDING_FLAG, '1')
     const redirectTo = `${window.location.origin}/signup?step=oauth-return`
     await onboardingService.signInWithGoogle(redirectTo)
   },
@@ -179,7 +156,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     return
   }
   if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-    loadClienteWithRecovery(session.user.id).then((cliente) => {
+    loadCliente(session.user.id).then((cliente) => {
       useAuth.setState({
         user: { id: session.user.id, email: session.user.email ?? '' },
         cliente,

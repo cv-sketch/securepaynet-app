@@ -1,10 +1,11 @@
 // supabase/functions/onboarding-complete/index.ts
-// POST con Bearer JWT del usuario recien creado.
+// POST con Bearer JWT del usuario recien creado + body { cuit }.
 // Crea clientes + wallets con stubs si no existen. Idempotente.
+// El CUIT lo provee el usuario en signup (no se genera automaticamente).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import { corsHeaders } from '../_shared/cors.ts'
-import { cuitMock } from '../_shared/cuitMock.ts'
+import { cuitCheckDigit } from '../_shared/cuit.ts'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
@@ -12,6 +13,22 @@ Deno.serve(async (req) => {
 
   const authHeader = req.headers.get('Authorization')
   if (!authHeader) return jsonErr(401, 'unauthenticated')
+
+  // Parse body para CUIT
+  let bodyCuit: string
+  try {
+    const body = await req.json()
+    bodyCuit = String(body?.cuit ?? '').replace(/\D/g, '')
+  } catch {
+    return jsonErr(400, 'invalid body')
+  }
+  if (!/^\d{11}$/.test(bodyCuit)) {
+    return jsonErr(400, 'CUIT debe tener 11 digitos')
+  }
+  const expectedDV = cuitCheckDigit(bodyCuit.slice(0, 10))
+  if (parseInt(bodyCuit[10], 10) !== expectedDV) {
+    return jsonErr(400, 'CUIT invalido (digito verificador no coincide)')
+  }
 
   // Validar JWT del usuario
   const userClient = createClient(
@@ -34,57 +51,58 @@ Deno.serve(async (req) => {
   // Step 1: cliente ya existe?
   const { data: existing, error: selErr } = await admin
     .from('clientes')
-    .select('id')
+    .select('id, cuit')
     .eq('auth_user_id', authUid)
     .maybeSingle()
   if (selErr) return jsonErr(500, selErr.message)
 
   let clienteId: string
+  let effectiveCuit: string
   let created = false
 
   if (existing) {
     clienteId = existing.id
+    // Conservamos el cuit del cliente existente. Ignoramos el input
+    // del usuario para no permitir cambio de identidad post-creacion.
+    effectiveCuit = existing.cuit ?? bodyCuit
   } else {
-    // Crear cliente con retry de CUIT
+    // Crear cliente con el cuit provisto por el usuario
     const localPart = email.split('@')[0].slice(0, 50)
-    let inserted: { id: string } | null = null
-    let lastErr: Error | null = null
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const cuit = await cuitMock(authUid, attempt)
-      const { data, error } = await admin
-        .from('clientes')
-        .insert({
-          auth_user_id: authUid,
-          email,
-          nombre: localPart,
-          apellido: 'Test',
-          cuit,
-          tipo: 'persona_fisica',
-        })
-        .select('id')
-        .maybeSingle()
-      if (data) {
-        inserted = data
-        break
-      }
-      lastErr = error ? new Error(error.message) : null
-      // Si fue UNIQUE violation por auth_user_id (otro proceso lo creo), buscar y salir
-      if (error?.message?.includes('clientes_auth_user_id_unique')) {
+    const { data, error } = await admin
+      .from('clientes')
+      .insert({
+        auth_user_id: authUid,
+        email,
+        nombre: localPart,
+        apellido: 'Test',
+        cuit: bodyCuit,
+        tipo: 'persona_fisica',
+      })
+      .select('id')
+      .maybeSingle()
+
+    if (error) {
+      // Race en auth_user_id (otro request del mismo user creo el cliente)
+      if (error.message?.includes('clientes_auth_user_id_unique') || error.message?.includes('auth_user_id')) {
         const { data: race } = await admin
-          .from('clientes').select('id').eq('auth_user_id', authUid).maybeSingle()
+          .from('clientes').select('id, cuit').eq('auth_user_id', authUid).maybeSingle()
         if (race) {
-          inserted = race
-          break
+          clienteId = race.id
+          effectiveCuit = race.cuit ?? bodyCuit
+        } else {
+          return jsonErr(500, `cliente lookup failed after race: ${error.message}`)
         }
+      } else if (error.code === '23505' || error.message?.toLowerCase().includes('cuit')) {
+        return jsonErr(409, 'Ya existe una cuenta con ese CUIT')
+      } else {
+        return jsonErr(500, `cliente insert failed: ${error.message}`)
       }
-      // Si fue UNIQUE en cuit, retry con attempt+1
-      if (error?.message?.includes('cuit') || error?.code === '23505') continue
-      // Otro error: abortar
-      return jsonErr(500, `cliente insert failed: ${error?.message}`)
+    } else {
+      if (!data) return jsonErr(500, 'cliente insert returned no data')
+      clienteId = data.id
+      effectiveCuit = bodyCuit
+      created = true
     }
-    if (!inserted) return jsonErr(500, `cliente insert failed after retries: ${lastErr?.message}`)
-    clienteId = inserted.id
-    created = true
   }
 
   // Step 2: wallet ya existe?
@@ -96,13 +114,14 @@ Deno.serve(async (req) => {
 
   let wallet = existingWallet
   if (!wallet) {
-    // Crear wallet con stub
+    // Crear wallet con stub. cuit denormalizado = clientes.cuit.
     const cvu = await mockCvu(authUid)
     const alias = `test.${clienteId.replace(/-/g, '').slice(0, 8)}.spn`
     const { data: insWallet, error: insWalletErr } = await admin
       .from('wallets')
       .insert({
         cliente_id: clienteId,
+        cuit: effectiveCuit,
         saldo: 5000,
         moneda: 'ARS',
         cvu,
@@ -111,7 +130,6 @@ Deno.serve(async (req) => {
       .select('cvu, alias, saldo, moneda')
       .maybeSingle()
     if (insWalletErr) {
-      // Si race condition, leer el existente
       const { data: race } = await admin
         .from('wallets').select('cvu, alias, saldo, moneda').eq('cliente_id', clienteId).maybeSingle()
       if (race) wallet = race
@@ -133,7 +151,6 @@ Deno.serve(async (req) => {
 })
 
 async function mockCvu(authUid: string): Promise<string> {
-  // Formato CVU: 22 digitos. Prefijo '0000003' (mock) + 15 digitos derivados.
   const data = new TextEncoder().encode(`cvu|${authUid}`)
   const buf = await crypto.subtle.digest('SHA-256', data)
   const bytes = new Uint8Array(buf)

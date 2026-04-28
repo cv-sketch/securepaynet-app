@@ -59,7 +59,7 @@ export const onboardingService = {
     if (error) throw error
   },
 
-  completeOnboarding: async (): Promise<OnboardingResult> => {
+  completeOnboarding: async (cuit: string): Promise<OnboardingResult> => {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('No active session')
     const res = await fetch(`${SUPABASE_URL}/functions/v1/onboarding-complete`, {
@@ -69,6 +69,7 @@ export const onboardingService = {
         'apikey': SUPABASE_ANON_KEY,
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ cuit }),
     })
     const json = (await res.json()) as OnboardingResult
     if (!json.ok) throw new Error(json.message ?? 'Onboarding failed')
