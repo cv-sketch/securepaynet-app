@@ -5,6 +5,13 @@ import { useAuth } from '../store/useAuth'
 export default function Login() {
   const nav = useNavigate()
   const [searchParams] = useSearchParams()
+  const expiredReason = searchParams.get('expired')
+  const expiredMessage =
+    expiredReason === 'idle'
+      ? 'Tu sesión finalizó por inactividad. Iniciá sesión nuevamente.'
+      : expiredReason === 'absolute'
+      ? 'Tu sesión alcanzó la duración máxima permitida. Iniciá sesión nuevamente.'
+      : null
   const { user, cliente, signIn, signInWithGoogleLogin, signOut, hydrating } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -82,6 +89,12 @@ export default function Login() {
           <div className="text-3xl font-bold text-brand-600">SecurePayNet</div>
           <div className="text-sm text-slate-500 mt-1">Tu billetera virtual</div>
         </div>
+
+        {expiredMessage && (
+          <div className="mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            {expiredMessage}
+          </div>
+        )}
 
         {info && (
           <div className="mb-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
