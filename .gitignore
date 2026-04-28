@@ -14,3 +14,4 @@ dist-ssr
 *.tsbuildinfo
 deno.lock
 supabase/.temp/
+.vercel
