@@ -268,7 +268,16 @@ export default function Transferir() {
         </form>
       )}
 
-      <ComprobanteModal open={comprobanteOpen} onClose={() => setComprobanteOpen(false)} comprobante={comprobanteData} />
+      <ComprobanteModal
+        open={comprobanteOpen}
+        onClose={() => {
+          setComprobanteOpen(false)
+          // Limpiar el mensaje de exito para que el form quede listo y el
+          // boton "Enviar transferencia" no quede empujado fuera de la vista.
+          if (msg?.ok) setMsg(null)
+        }}
+        comprobante={comprobanteData}
+      />
 
       {pickerOpen && (
         <ContactoPicker
