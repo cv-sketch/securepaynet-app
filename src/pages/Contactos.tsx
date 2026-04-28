@@ -5,7 +5,7 @@ import { useAuth } from '../store/useAuth'
 import { contactosService, type Contacto, type ContactoInput } from '../services/contactosService'
 import { lookupService, type LookupOk } from '../services/lookupService'
 import { maskCBU } from '../lib/format'
-import SecurityGate from '../components/SecurityGate'
+import ElevationGate from '../components/ElevationGate'
 
 export default function Contactos() {
   const { cliente } = useAuth()
@@ -14,9 +14,6 @@ export default function Contactos() {
   const [err, setErr] = useState<string | null>(null)
   const [altaOpen, setAltaOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<Contacto | null>(null)
-  const [removeTarget, setRemoveTarget] = useState<Contacto | null>(null)
-  const [gateOpen, setGateOpen] = useState(false)
-  const [pendingInput, setPendingInput] = useState<ContactoInput | null>(null)
 
   async function refresh() {
     if (!cliente?.id) return
@@ -34,25 +31,34 @@ export default function Contactos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cliente?.id])
 
-  async function handleGateSuccess(gateToken: string) {
-    setGateOpen(false)
+  async function handleAdd(input: ContactoInput, trigger: () => Promise<string | null>) {
+    setErr(null)
+    const token = await trigger()
+    if (!token) return // usuario cancelo el gate
     try {
-      if (pendingInput) {
-        await contactosService.createGated(pendingInput, gateToken)
-        setPendingInput(null)
-        setAltaOpen(false)
-        await refresh()
-      } else if (removeTarget) {
-        await contactosService.removeGated(removeTarget.id, gateToken)
-        setRemoveTarget(null)
-        await refresh()
-      }
+      await contactosService.createGated(input, token)
+      setAltaOpen(false)
+      await refresh()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+
+  async function handleRemove(target: Contacto, trigger: () => Promise<string | null>) {
+    setErr(null)
+    const token = await trigger()
+    if (!token) return
+    try {
+      await contactosService.removeGated(target.id, token)
+      await refresh()
     } catch (e) {
       setErr((e as Error).message)
     }
   }
 
   return (
+    <ElevationGate scope="add_contact">
+      {({ trigger, pending }) => (
     <div className="p-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">Contactos</h1>
@@ -108,8 +114,9 @@ export default function Contactos() {
                   Editar
                 </button>
                 <button
-                  onClick={() => { setRemoveTarget(c); setGateOpen(true) }}
-                  className="text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded"
+                  onClick={() => void handleRemove(c, trigger)}
+                  disabled={pending}
+                  className="text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded disabled:opacity-50"
                 >
                   Borrar
                 </button>
@@ -123,8 +130,8 @@ export default function Contactos() {
 
       {altaOpen && (
         <AltaModal
-          onClose={() => { setAltaOpen(false); setPendingInput(null) }}
-          onConfirm={(input) => { setPendingInput(input); setGateOpen(true) }}
+          onClose={() => setAltaOpen(false)}
+          onConfirm={(input) => void handleAdd(input, trigger)}
         />
       )}
 
@@ -135,14 +142,9 @@ export default function Contactos() {
           onSaved={async () => { setEditTarget(null); await refresh() }}
         />
       )}
-
-      <SecurityGate
-        open={gateOpen}
-        reason={removeTarget ? 'eliminar contacto' : 'agendar contacto'}
-        onClose={() => { setGateOpen(false); setPendingInput(null); setRemoveTarget(null) }}
-        onSuccess={handleGateSuccess}
-      />
     </div>
+      )}
+    </ElevationGate>
   )
 }
 

@@ -81,7 +81,7 @@ export default function Signup() {
       setError('CUIT inválido. Verificá los 11 dígitos.'); 
       return 
     }
-    if (typeof window !== 'undefined') window.sessionStorage?.setItem(PENDING_CUIT_KEY, c1)
+    if (typeof window !== 'undefined') window.sessionStorage?.setItem(PENDING_CUIT_KEY, normalizeCuit(cuit))
     setLoading(true)
     try {
       await signInWithGoogleSignup()
@@ -113,7 +113,7 @@ export default function Signup() {
     setLoading(true)
     try {
       await signUpWithEmail(email, password)
-      setStep({ kind: 'verify-otp', email, cuit: c1 })
+      setStep({ kind: 'verify-otp', email, cuit: normalizeCuit(cuit) })
     } catch (err: any) {
       if (err?.code === 'USER_ALREADY_EXISTS') {
         setEmailExists(true)
@@ -314,7 +314,7 @@ export default function Signup() {
               />
             </div>
             <button
-              type="submit" disabled={loading || otpCode.length !== 6}
+              type="submit" disabled={loading || !validateOtpCode(otpCode)}
               className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
             >
               {loading ? 'Verificando…' : 'Verificar'}
