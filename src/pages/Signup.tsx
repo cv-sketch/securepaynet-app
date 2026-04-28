@@ -2,7 +2,16 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 import { onboardingService } from '../services/onboardingService'
-import { isValidCuit, normalizeCuit, formatCuit } from '../lib/cuit'
+import { formatCuit } from '../lib/cuit'
+import { 
+  isValidCuit, 
+  normalizeCuit,
+  validateEmail,
+  validatePassword,
+  validatePasswordMatch,
+  validateCuitMatch,
+  validateOtpCode
+} from '../utils/validations'
 import PinSetupForm from '../components/PinSetupForm'
 
 const PENDING_CUIT_KEY = 'pending-signup-cuit'
@@ -64,10 +73,14 @@ export default function Signup() {
   const handleGoogleCuitSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null); setEmailExists(false)
-    const c1 = normalizeCuit(cuit)
-    const c2 = normalizeCuit(confirmCuit)
-    if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
-    if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
+    if (!validateCuitMatch(cuit, confirmCuit)) { 
+      setError('Los CUITs no coinciden'); 
+      return 
+    }
+    if (!isValidCuit(normalizeCuit(cuit))) { 
+      setError('CUIT inválido. Verificá los 11 dígitos.'); 
+      return 
+    }
     if (typeof window !== 'undefined') window.sessionStorage?.setItem(PENDING_CUIT_KEY, c1)
     setLoading(true)
     try {
@@ -80,12 +93,23 @@ export default function Signup() {
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setEmailExists(false)
-    const c1 = normalizeCuit(cuit)
-    const c2 = normalizeCuit(confirmCuit)
-    if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
-    if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
-    if (password.length < 6) { setError('La contraseña debe tener al menos 6 caracteres'); return }
-    if (password !== confirmPassword) { setError('Las contraseñas no coinciden'); return }
+    if (!validateCuitMatch(cuit, confirmCuit)) { 
+      setError('Los CUITs no coinciden'); 
+      return 
+    }
+    if (!isValidCuit(normalizeCuit(cuit))) { 
+      setError('CUIT inválido. Verificá los 11 dígitos.'); 
+      return 
+    }
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.valid) {
+      setError(passwordValidation.message || '');
+      return;
+    }
+    if (!validatePasswordMatch(password, confirmPassword)) { 
+      setError('Las contraseñas no coinciden'); 
+      return 
+    }
     setLoading(true)
     try {
       await signUpWithEmail(email, password)
