@@ -29,7 +29,7 @@ export default function Perfil() {
       <PasskeysSection />
 
       <button
-        onClick={signOut}
+        onClick={() => signOut()}
         className="w-full bg-white border border-red-200 text-red-600 hover:bg-red-50 font-semibold py-3 rounded-xl"
       >
         Cerrar sesion

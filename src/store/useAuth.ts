@@ -3,9 +3,9 @@ import { supabase } from '../lib/supabase'
 import { onboardingService } from '../services/onboardingService'
 import { passkeyService } from '../services/passkeyService'
 import { authenticateCredential } from '../lib/webauthn'
+import { createSession, revokeSession } from '../lib/sessionApi'
 
-// Onboarding ahora requiere CUIT del usuario via formulario en /signup;
-// no puede ejecutarse automaticamente desde el listener de auth.
+const SESSION_ID_KEY = 'spn.session_id'
 
 type Cliente = {
   id: string
@@ -24,15 +24,17 @@ type Cliente = {
 type State = {
   user: { id: string; email: string } | null
   cliente: Cliente | null
+  sessionId: string | null
   hydrating: boolean
   hydrate: () => Promise<void>
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
-  signOut: () => Promise<void>
+  signOut: (reason?: 'user' | 'idle' | 'absolute') => Promise<void>
   signUpWithEmail: (email: string, password: string) => Promise<void>
   verifyEmailOtp: (email: string, code: string) => Promise<void>
   signInWithGoogleLogin: () => Promise<void>
   signInWithGoogleSignup: () => Promise<void>
   signInWithPasskey: (email: string) => Promise<void>
+  ensureSession: () => Promise<void>
 }
 
 async function loadCliente(authUserId: string): Promise<Cliente | null> {
@@ -46,18 +48,12 @@ async function loadCliente(authUserId: string): Promise<Cliente | null> {
       console.error('[loadCliente] clientes error:', e1)
       return null
     }
-    if (!cli) {
-      console.warn('[loadCliente] no cliente found for auth_user_id', authUserId)
-      return null
-    }
-
-    const { data: wal, error: e2 } = await supabase
+    if (!cli) return null
+    const { data: wal } = await supabase
       .from('wallets')
       .select('cvu, alias, saldo, moneda')
       .eq('cliente_id', cli.id)
       .maybeSingle()
-    if (e2) console.error('[loadCliente] wallets error:', e2)
-
     return {
       id: cli.id,
       nombre: cli.nombre,
@@ -77,16 +73,18 @@ async function loadCliente(authUserId: string): Promise<Cliente | null> {
   }
 }
 
-export const useAuth = create<State>((set) => ({
+export const useAuth = create<State>((set, get) => ({
   user: null,
   cliente: null,
+  sessionId: localStorage.getItem(SESSION_ID_KEY),
   hydrating: true,
 
   hydrate: async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session?.user) {
-        set({ user: null, cliente: null, hydrating: false })
+        localStorage.removeItem(SESSION_ID_KEY)
+        set({ user: null, cliente: null, sessionId: null, hydrating: false })
         return
       }
       const cliente = await loadCliente(session.user.id)
@@ -95,13 +93,27 @@ export const useAuth = create<State>((set) => ({
         cliente,
         hydrating: false,
       })
+      if (!localStorage.getItem(SESSION_ID_KEY)) {
+        await get().ensureSession()
+      }
     } catch (err) {
       console.error('[hydrate] error:', err)
       set({ hydrating: false })
     }
   },
 
-  signIn: async (email: string, password: string) => {
+  ensureSession: async () => {
+    if (get().sessionId) return
+    try {
+      const { session_id } = await createSession()
+      localStorage.setItem(SESSION_ID_KEY, session_id)
+      set({ sessionId: session_id })
+    } catch (e) {
+      console.error('[ensureSession] failed:', e)
+    }
+  },
+
+  signIn: async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return { error: error.message }
     if (data.user) {
@@ -110,21 +122,25 @@ export const useAuth = create<State>((set) => ({
         user: { id: data.user.id, email: data.user.email ?? '' },
         cliente,
       })
+      await get().ensureSession()
     }
     return { error: null }
   },
 
-  signOut: async () => {
+  signOut: async (reason = 'user') => {
+    const sid = get().sessionId
+    if (sid && reason === 'user') {
+      try { await revokeSession(sid, 'user') } catch (e) { console.warn(e) }
+    }
+    localStorage.removeItem(SESSION_ID_KEY)
     await supabase.auth.signOut()
-    set({ user: null, cliente: null })
+    set({ user: null, cliente: null, sessionId: null })
   },
 
   signUpWithEmail: async (email, password) => {
     await onboardingService.signUpWithEmail(email, password)
   },
 
-  // verifyOtp NO llama a completeOnboarding. Signup.tsx lo hace
-  // explicitamente despues de pedir el CUIT al usuario.
   verifyEmailOtp: async (email, code) => {
     await onboardingService.verifyEmailOtp(email, code)
   },
@@ -145,14 +161,14 @@ export const useAuth = create<State>((set) => ({
     const { hashedToken } = await passkeyService.loginFinish(email, credential)
     const { error } = await supabase.auth.verifyOtp({ token_hash: hashedToken, type: 'magiclink' })
     if (error) throw error
-    // listener onAuthStateChange recarga cliente
+    // ensureSession se llamará desde el listener onAuthStateChange.
   },
 }))
 
-// Listener de cambios de sesion - NO bloquea hydrate
 supabase.auth.onAuthStateChange((event, session) => {
   if (event === 'SIGNED_OUT' || !session?.user) {
-    useAuth.setState({ user: null, cliente: null })
+    localStorage.removeItem(SESSION_ID_KEY)
+    useAuth.setState({ user: null, cliente: null, sessionId: null })
     return
   }
   if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
@@ -161,6 +177,7 @@ supabase.auth.onAuthStateChange((event, session) => {
         user: { id: session.user.id, email: session.user.email ?? '' },
         cliente,
       })
+      if (event === 'SIGNED_IN') void useAuth.getState().ensureSession()
     })
   }
 })
