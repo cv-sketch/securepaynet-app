@@ -45,9 +45,16 @@ export const onboardingService = {
   },
 
   signInWithGoogle: async (redirectTo: string) => {
+    // SEGURIDAD CRITICA: prompt=select_account fuerza a Google a mostrar el
+    // account chooser cada vez. Sin esto, Google reusa silenciosamente la
+    // sesion de Google activa en el browser, lo que permite landearse en
+    // una cuenta que NO es la que el usuario queria autenticar.
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo },
+      options: {
+        redirectTo,
+        queryParams: { prompt: 'select_account' },
+      },
     })
     if (error) throw error
   },
