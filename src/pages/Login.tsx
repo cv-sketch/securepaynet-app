@@ -1,19 +1,33 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 
 export default function Login() {
   const nav = useNavigate()
-  const { user, signIn, signInWithGoogle, hydrating } = useAuth()
+  const [searchParams] = useSearchParams()
+  const { user, cliente, signIn, signInWithGoogleLogin, signOut, hydrating } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(
+    searchParams.get('from') === 'signup' ? 'Cuenta creada. Ingresá con tu email y contraseña.' : null
+  )
   const [passkeySupported, setPasskeySupported] = useState(false)
 
+  // Si hay sesion + cliente => entrar.
+  // Si hay sesion pero NO cliente (ej: Google con cuenta inexistente) => expulsar.
   useEffect(() => {
-    if (user && !hydrating) nav('/', { replace: true })
-  }, [user, hydrating, nav])
+    if (hydrating || !user) return
+    if (cliente) {
+      nav('/', { replace: true })
+    } else {
+      ;(async () => {
+        await signOut()
+        setError('No existe una cuenta con ese email. Creá una nueva primero.')
+      })()
+    }
+  }, [user, cliente, hydrating, nav, signOut])
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.PublicKeyCredential) {
@@ -32,9 +46,9 @@ export default function Login() {
   }
 
   const handleGoogle = async () => {
-    setError(null); setLoading(true)
+    setError(null); setInfo(null); setLoading(true)
     try {
-      await signInWithGoogle()
+      await signInWithGoogleLogin()
     } catch (err: any) {
       setError(err.message ?? 'Error con Google')
       setLoading(false)
@@ -68,6 +82,12 @@ export default function Login() {
           <div className="text-3xl font-bold text-brand-600">SecurePayNet</div>
           <div className="text-sm text-slate-500 mt-1">Tu billetera virtual</div>
         </div>
+
+        {info && (
+          <div className="mb-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+            {info}
+          </div>
+        )}
 
         <button
           type="button"

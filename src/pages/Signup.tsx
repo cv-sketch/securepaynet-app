@@ -2,72 +2,73 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 import { onboardingService } from '../services/onboardingService'
-import { passkeyService } from '../services/passkeyService'
 
 type Step =
   | { kind: 'choose-method' }
   | { kind: 'email-password-form' }
   | { kind: 'verify-otp'; email: string }
-  | { kind: 'completing-onboarding' }
-  | { kind: 'passkey-prompt' }
-  | { kind: 'done' }
+  | { kind: 'finalizing' }
 
 export default function Signup() {
   const nav = useNavigate()
   const [searchParams] = useSearchParams()
-  const { signUpWithEmail, verifyEmailOtp, signInWithGoogle, user } = useAuth()
+  const { signUpWithEmail, verifyEmailOtp, signInWithGoogleSignup, signOut, user } = useAuth()
   const [step, setStep] = useState<Step>({ kind: 'choose-method' })
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [otpCode, setOtpCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [emailExists, setEmailExists] = useState(false)
-  const [passkeySupported, setPasskeySupported] = useState(false)
 
+  // Si volvemos de Google OAuth con ?step=oauth-return, finalizar.
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.PublicKeyCredential) setPasskeySupported(true)
-  }, [])
-
-  // Si volvemos de Google OAuth con ?step=onboarding, saltar a completing
-  useEffect(() => {
-    if (searchParams.get('step') === 'onboarding' && user) {
-      setStep({ kind: 'completing-onboarding' })
+    if (searchParams.get('step') === 'oauth-return' && user) {
+      setStep({ kind: 'finalizing' })
     }
   }, [searchParams, user])
 
-  // Trigger onboarding-complete cuando entramos a ese step
+  // 'finalizing' = cliente creado (via recovery o verifyOtp) -> signOut -> /login.
+  // Nunca dejamos al user dentro de la app desde signup.
   useEffect(() => {
-    if (step.kind === 'completing-onboarding') {
-      ;(async () => {
-        try {
-          await onboardingService.completeOnboarding()
-          if (typeof window !== 'undefined') window.sessionStorage?.removeItem('onboarding-pending')
-          setStep({ kind: 'passkey-prompt' })
-        } catch (err: any) {
-          setError(err.message ?? 'Error completando onboarding')
-        }
-      })()
-    }
-  }, [step.kind])
-
-  // Cuando llegamos a 'done', redirigir
-  useEffect(() => {
-    if (step.kind === 'done') nav('/', { replace: true })
-  }, [step.kind, nav])
+    if (step.kind !== 'finalizing') return
+    ;(async () => {
+      try {
+        // Idempotente: si ya existe cliente, no hace nada nuevo.
+        await onboardingService.completeOnboarding()
+      } catch (err: any) {
+        setError(err.message ?? 'Error finalizando registro')
+        return
+      }
+      if (typeof window !== 'undefined') window.sessionStorage?.removeItem('onboarding-pending')
+      await signOut()
+      nav('/login?from=signup', { replace: true })
+    })()
+  }, [step.kind, signOut, nav])
 
   const handleGoogle = async () => {
     setError(null); setLoading(true)
-    try { await signInWithGoogle() } catch (err: any) {
+    try {
+      await signInWithGoogleSignup()
+    } catch (err: any) {
       setError(err.message ?? 'Error con Google')
       setLoading(false)
     }
-    // sigue en redirect
   }
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null); setEmailExists(false); setLoading(true)
+    setError(null); setEmailExists(false)
+    if (password.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres')
+      return
+    }
+    if (password !== confirmPassword) {
+      setError('Las contraseñas no coinciden')
+      return
+    }
+    setLoading(true)
     try {
       await signUpWithEmail(email, password)
       setStep({ kind: 'verify-otp', email })
@@ -86,9 +87,9 @@ export default function Signup() {
     setError(null); setLoading(true)
     try {
       await verifyEmailOtp(step.email, otpCode)
-      setStep({ kind: 'passkey-prompt' })
+      setStep({ kind: 'finalizing' })
     } catch (err: any) {
-      setError(err.message ?? 'Codigo invalido')
+      setError(err.message ?? 'Codigo invalido o expirado (vence en 3 min)')
     } finally { setLoading(false) }
   }
 
@@ -102,18 +103,6 @@ export default function Signup() {
       setError(err.message ?? 'Error reenviando codigo')
     } finally { setLoading(false) }
   }
-
-  const handleActivatePasskey = async () => {
-    setError(null); setLoading(true)
-    try {
-      await passkeyService.registerCurrentDevice()
-      setStep({ kind: 'done' })
-    } catch (err: any) {
-      setError(err.message ?? 'No se pudo activar la passkey')
-    } finally { setLoading(false) }
-  }
-
-  const handleSkipPasskey = () => setStep({ kind: 'done' })
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-brand-600 to-brand-700 flex items-center justify-center p-4">
@@ -181,6 +170,15 @@ export default function Signup() {
                 placeholder="al menos 6 caracteres" autoComplete="new-password"
               />
             </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Confirmar contrasena</label>
+              <input
+                type="password" required value={confirmPassword} minLength={6}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none"
+                placeholder="repetí la contraseña" autoComplete="new-password"
+              />
+            </div>
             <button
               type="submit" disabled={loading}
               className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
@@ -197,10 +195,10 @@ export default function Signup() {
         {step.kind === 'verify-otp' && (
           <form onSubmit={handleOtpSubmit} className="space-y-4">
             <div className="text-sm text-slate-700">
-              Te enviamos un codigo a <strong>{step.email}</strong>. Revisa tu inbox (y spam).
+              Te enviamos un código de 6 dígitos a <strong>{step.email}</strong>. Vence en 3 minutos. Revisá inbox y spam.
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Codigo de 6 digitos</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Código de 6 dígitos</label>
               <input
                 type="text" required value={otpCode}
                 onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
@@ -216,39 +214,14 @@ export default function Signup() {
             </button>
             <button type="button" onClick={handleResendOtp} disabled={loading}
               className="w-full text-xs text-brand-600 hover:underline">
-              Reenviar codigo
+              Reenviar código
             </button>
           </form>
         )}
 
-        {step.kind === 'completing-onboarding' && (
+        {step.kind === 'finalizing' && (
           <div className="text-center text-sm text-slate-600 py-8">
-            Configurando tu cuenta…
-          </div>
-        )}
-
-        {step.kind === 'passkey-prompt' && (
-          <div className="space-y-4">
-            <div className="text-sm text-slate-700">
-              <div className="font-semibold mb-1">Activar acceso rapido</div>
-              <div>La proxima vez ingresa con tu huella o cara, sin contrasena.</div>
-            </div>
-            {passkeySupported ? (
-              <button
-                onClick={handleActivatePasskey} disabled={loading}
-                className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
-              >
-                {loading ? 'Activando…' : 'Activar passkey'}
-              </button>
-            ) : (
-              <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-2">
-                Tu dispositivo no soporta passkeys. Podes ingresar con email y contrasena.
-              </div>
-            )}
-            <button onClick={handleSkipPasskey}
-              className="w-full border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2.5 rounded-lg">
-              Mas tarde
-            </button>
+            Cuenta creada. Redirigiendo al login…
           </div>
         )}
 

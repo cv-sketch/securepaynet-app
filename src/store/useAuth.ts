@@ -27,7 +27,8 @@ type State = {
   signOut: () => Promise<void>
   signUpWithEmail: (email: string, password: string) => Promise<void>
   verifyEmailOtp: (email: string, code: string) => Promise<void>
-  signInWithGoogle: () => Promise<void>
+  signInWithGoogleLogin: () => Promise<void>
+  signInWithGoogleSignup: () => Promise<void>
   signInWithPasskey: (email: string) => Promise<void>
 }
 
@@ -145,9 +146,19 @@ export const useAuth = create<State>((set) => ({
     if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
   },
 
-  signInWithGoogle: async () => {
+  // LOGIN: NO setea ONBOARDING_FLAG. Si el user no tiene cliente, Login.tsx
+  // lo expulsa con error. Nunca crea cuenta automaticamente desde /login.
+  signInWithGoogleLogin: async () => {
+    if (typeof window !== 'undefined') window.sessionStorage?.removeItem(ONBOARDING_FLAG)
+    const redirectTo = `${window.location.origin}/login`
+    await onboardingService.signInWithGoogle(redirectTo)
+  },
+
+  // SIGNUP: setea ONBOARDING_FLAG para que loadClienteWithRecovery cree el
+  // cliente. Despues Signup.tsx hace signOut y manda al user a /login.
+  signInWithGoogleSignup: async () => {
     if (typeof window !== 'undefined') window.sessionStorage?.setItem(ONBOARDING_FLAG, '1')
-    const redirectTo = `${window.location.origin}/signup?step=onboarding`
+    const redirectTo = `${window.location.origin}/signup?step=oauth-return`
     await onboardingService.signInWithGoogle(redirectTo)
   },
 
