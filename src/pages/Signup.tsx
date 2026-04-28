@@ -22,6 +22,7 @@ export default function Signup() {
   const [otpCode, setOtpCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [emailExists, setEmailExists] = useState(false)
   const [passkeySupported, setPasskeySupported] = useState(false)
 
   useEffect(() => {
@@ -66,12 +67,16 @@ export default function Signup() {
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null); setLoading(true)
+    setError(null); setEmailExists(false); setLoading(true)
     try {
       await signUpWithEmail(email, password)
       setStep({ kind: 'verify-otp', email })
     } catch (err: any) {
-      setError(err.message ?? 'Error creando cuenta')
+      if (err?.code === 'USER_ALREADY_EXISTS') {
+        setEmailExists(true)
+      } else {
+        setError(err.message ?? 'Error creando cuenta')
+      }
     } finally { setLoading(false) }
   }
 
@@ -149,11 +154,20 @@ export default function Signup() {
 
         {step.kind === 'email-password-form' && (
           <form onSubmit={handleEmailSubmit} className="space-y-4">
+            {emailExists && (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                Ya existe una cuenta con <strong>{email}</strong>.{' '}
+                <Link to="/login" className="text-brand-600 hover:underline font-semibold">
+                  Ingresar
+                </Link>
+                {' '}o usá otro email.
+              </div>
+            )}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
               <input
                 type="email" required value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => { setEmail(e.target.value); setEmailExists(false) }}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none"
                 placeholder="tu@email.com" autoComplete="email"
               />

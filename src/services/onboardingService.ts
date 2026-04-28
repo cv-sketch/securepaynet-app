@@ -21,6 +21,13 @@ export const onboardingService = {
   signUpWithEmail: async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({ email, password })
     if (error) throw error
+    // Supabase no devuelve error si el email ya existe (anti-enumeration);
+    // la señal es identities=[]. Detectarlo aca evita un OTP fantasma.
+    if (data.user && (data.user.identities?.length ?? 0) === 0) {
+      const e = new Error('USER_ALREADY_EXISTS') as Error & { code?: string }
+      e.code = 'USER_ALREADY_EXISTS'
+      throw e
+    }
     return data
   },
 
