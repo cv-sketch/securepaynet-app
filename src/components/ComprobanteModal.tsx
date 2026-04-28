@@ -6,9 +6,10 @@ type Props = {
   open: boolean
   onClose: () => void
   comprobante: ComprobanteData | null
+  onNewTransfer?: () => void
 }
 
-export default function ComprobanteModal({ open, onClose, comprobante }: Props) {
+export default function ComprobanteModal({ open, onClose, comprobante, onNewTransfer }: Props) {
   const cardRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<'pdf' | 'share' | null>(null)
   const [hint, setHint] = useState<string | null>(null)
@@ -45,7 +46,7 @@ export default function ComprobanteModal({ open, onClose, comprobante }: Props) 
       const file = new File([blob], filename, { type: 'image/png' })
       const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean }
 
-      // Web Share API con archivo (mobile: WhatsApp, Telegram, Mail, etc.)
+      // 1) Web Share API con archivo (mobile: WhatsApp, Telegram, Mail, etc.)
       if (nav.canShare && nav.canShare({ files: [file] }) && nav.share) {
         try {
           await nav.share({
@@ -55,18 +56,32 @@ export default function ComprobanteModal({ open, onClose, comprobante }: Props) 
           })
           return
         } catch (err: any) {
-          // El usuario canceló — no es error
           if (err?.name === 'AbortError') return
+          // Sigue al fallback
         }
       }
 
-      // Fallback: descargar imagen + abrir WhatsApp con texto
+      // 2) Clipboard API — copiar la imagen al portapapeles. El usuario
+      //    luego pega (Ctrl/Cmd+V) directamente en WhatsApp Web.
+      try {
+        if (navigator.clipboard && 'write' in navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob }),
+          ])
+          setHint('Imagen copiada. Pegala (Ctrl/Cmd+V) en WhatsApp.')
+          return
+        }
+      } catch {
+        // sigue al fallback de descarga
+      }
+
+      // 3) Ultimo recurso: descargar imagen + abrir WhatsApp con texto.
       triggerDownload(blob, filename)
       const text = encodeURIComponent(
         `Comprobante SecurePayNet por ${formatARS(comprobante.monto)} (${formatDateAR(comprobante.fecha)}). Adjunto la imagen.`
       )
       window.open(`https://wa.me/?text=${text}`, '_blank', 'noopener')
-      setHint('Imagen descargada. Adjuntala en WhatsApp.')
+      setHint('Imagen descargada. Adjuntala manualmente en WhatsApp.')
     } catch {
       setHint('No se pudo compartir')
     } finally {
@@ -152,6 +167,15 @@ export default function ComprobanteModal({ open, onClose, comprobante }: Props) 
             {busy === 'pdf' ? 'Generando…' : 'Descargar PDF'}
           </button>
         </div>
+
+        {onNewTransfer && (
+          <button
+            onClick={onNewTransfer}
+            className="mt-3 w-full border-2 border-brand-600 text-brand-700 hover:bg-brand-50 font-semibold py-2.5 rounded-lg"
+          >
+            Hacer otra transferencia
+          </button>
+        )}
 
         <button
           onClick={onClose}

@@ -272,9 +272,16 @@ export default function Transferir() {
         open={comprobanteOpen}
         onClose={() => {
           setComprobanteOpen(false)
-          // Limpiar el mensaje de exito para que el form quede listo y el
-          // boton "Enviar transferencia" no quede empujado fuera de la vista.
           if (msg?.ok) setMsg(null)
+        }}
+        onNewTransfer={() => {
+          setComprobanteOpen(false)
+          setMsg(null)
+          setMonto('')
+          setDescripcion('')
+          // Mantenemos contactoSel para poder repetir al mismo destinatario.
+          // Llevamos al user al top del form.
+          window.scrollTo({ top: 0, behavior: 'smooth' })
         }}
         comprobante={comprobanteData}
       />
