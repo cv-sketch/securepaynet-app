@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../store/useAuth'
 import { onboardingService } from '../services/onboardingService'
 import { isValidCuit, normalizeCuit, formatCuit } from '../lib/cuit'
+import PinSetupForm from '../components/PinSetupForm'
 
 const PENDING_CUIT_KEY = 'pending-signup-cuit'
 
@@ -12,6 +13,7 @@ type Step =
   | { kind: 'email-password-form' }
   | { kind: 'verify-otp'; email: string; cuit: string }
   | { kind: 'collect-cuit' } // fallback si volvemos de Google sin CUIT guardado
+  | { kind: 'set-pin'; cuit: string }
   | { kind: 'finalizing'; cuit: string }
 
 export default function Signup() {
@@ -37,7 +39,8 @@ export default function Signup() {
       ? window.sessionStorage?.getItem(PENDING_CUIT_KEY) ?? null
       : null
     if (stored && isValidCuit(stored)) {
-      setStep({ kind: 'finalizing', cuit: normalizeCuit(stored) })
+      // Path B (Google): pasamos por set-pin antes de finalizar.
+      setStep({ kind: 'set-pin', cuit: normalizeCuit(stored) })
     } else {
       setStep({ kind: 'collect-cuit' })
     }
@@ -106,7 +109,8 @@ export default function Signup() {
     setError(null); setLoading(true)
     try {
       await verifyEmailOtp(step.email, otpCode)
-      setStep({ kind: 'finalizing', cuit: step.cuit })
+      // Path A (email/pwd): pasamos por set-pin antes de finalizar.
+      setStep({ kind: 'set-pin', cuit: step.cuit })
     } catch (err: any) {
       setError(err.message ?? 'Codigo invalido o expirado (vence en 3 min)')
     } finally { setLoading(false) }
@@ -130,7 +134,7 @@ export default function Signup() {
     const c2 = normalizeCuit(confirmCuit)
     if (c1 !== c2) { setError('Los CUITs no coinciden'); return }
     if (!isValidCuit(c1)) { setError('CUIT inválido. Verificá los 11 dígitos.'); return }
-    setStep({ kind: 'finalizing', cuit: c1 })
+    setStep({ kind: 'set-pin', cuit: c1 })
   }
 
   return (
@@ -332,6 +336,19 @@ export default function Signup() {
               Confirmar
             </button>
           </form>
+        )}
+
+        {step.kind === 'set-pin' && (
+          <div className="space-y-4">
+            <div className="text-sm text-slate-700">
+              Configura tu <strong>PIN de 6 digitos</strong>. Lo vas a usar para autorizar
+              transferencias y otras operaciones sensibles.
+            </div>
+            <PinSetupForm
+              mode="initial"
+              onComplete={() => setStep({ kind: 'finalizing', cuit: step.cuit })}
+            />
+          </div>
         )}
 
         {step.kind === 'finalizing' && (
