@@ -1,6 +1,8 @@
-﻿import { Routes, Route, Navigate } from 'react-router-dom'
+﻿import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useAuth } from './store/useAuth'
+import SessionExpiryModal from './components/SessionExpiryModal'
+import { useSessionTimeout } from './hooks/useSessionTimeout'
 import AppLayout from './layouts/AppLayout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -24,10 +26,35 @@ import Contactos from './pages/Contactos'
 import Signup from './pages/Signup'
 
 function Protected({ children }: { children: JSX.Element }) {
-  const { user, hydrating } = useAuth()
+  const { user, hydrating, sessionId, signOut } = useAuth()
+  const nav = useNavigate()
+  const { idleRemaining, showWarning, expiredReason, refresh } = useSessionTimeout(sessionId)
+
+  useEffect(() => {
+    if (!expiredReason) return
+    void (async () => {
+      await signOut(expiredReason === 'idle' ? 'idle' : 'absolute')
+      nav(`/login?expired=${expiredReason}`, { replace: true })
+    })()
+  }, [expiredReason, signOut, nav])
+
   if (hydrating) return <div className="p-8 text-center text-slate-500">Cargando…</div>
   if (!user) return <Navigate to="/login" replace />
-  return children
+
+  return (
+    <>
+      {children}
+      <SessionExpiryModal
+        open={showWarning}
+        remainingSeconds={idleRemaining}
+        onContinue={refresh}
+        onLogout={async () => {
+          await signOut('user')
+          nav('/login', { replace: true })
+        }}
+      />
+    </>
+  )
 }
 
 export default function App() {
